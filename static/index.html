@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAMWATER — Extraction automatique de factures</title>
+<style>
+  :root {
+    --bleu: #1f4e79;
+    --bleu-clair: #2e75b6;
+    --fond: #f4f6f9;
+    --bord: #d7dde5;
+    --ok: #1e7d43;
+    --alerte: #b06a00;
+    --erreur: #b42318;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--fond); color: #1c2430;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.5;
+  }
+  header {
+    background: var(--bleu); color: #fff; padding: 1.25rem 1.5rem;
+  }
+  header h1 { margin: 0; font-size: 1.25rem; }
+  header p { margin: .25rem 0 0; opacity: .85; font-size: .9rem; }
+  main { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+  section {
+    background: #fff; border: 1px solid var(--bord); border-radius: 10px;
+    padding: 1.25rem; margin-bottom: 1.25rem;
+  }
+  h2 { margin: 0 0 1rem; font-size: 1rem; text-transform: uppercase;
+       letter-spacing: .04em; color: var(--bleu); }
+  .champs { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1rem; }
+  label { display: block; font-size: .82rem; font-weight: 600; margin-bottom: .3rem; }
+  input, select {
+    width: 100%; padding: .55rem .65rem; border: 1px solid var(--bord);
+    border-radius: 6px; font-size: .95rem; background: #fff;
+  }
+  .depot {
+    margin-top: 1rem; border: 2px dashed var(--bleu-clair); border-radius: 10px;
+    padding: 2rem 1rem; text-align: center; cursor: pointer; background: #fbfdff;
+    transition: background .15s;
+  }
+  .depot.actif { background: #e8f1fb; }
+  .depot strong { color: var(--bleu); }
+  .depot small { display: block; color: #5b6675; margin-top: .35rem; }
+  ul#liste-fichiers { list-style: none; padding: 0; margin: .75rem 0 0; font-size: .9rem; }
+  ul#liste-fichiers li { padding: .3rem 0; border-bottom: 1px solid var(--bord); }
+  button {
+    margin-top: 1rem; background: var(--bleu); color: #fff; border: 0;
+    padding: .7rem 1.4rem; border-radius: 6px; font-size: .95rem;
+    font-weight: 600; cursor: pointer;
+  }
+  button:disabled { background: #93a2b3; cursor: not-allowed; }
+  button.secondaire { background: #fff; color: var(--bleu); border: 1px solid var(--bleu); }
+  .barre { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; }
+  .carte {
+    border: 1px solid var(--bord); border-left-width: 5px; border-radius: 8px;
+    padding: .9rem 1rem; margin-bottom: .75rem; font-size: .92rem;
+  }
+  .carte.ok { border-left-color: var(--ok); }
+  .carte.attention { border-left-color: var(--alerte); }
+  .carte.erreur { border-left-color: var(--erreur); }
+  .carte h3 { margin: 0 0 .35rem; font-size: .95rem; }
+  .puces { display: flex; gap: .5rem; flex-wrap: wrap; margin: .5rem 0; }
+  .puce {
+    background: #eef2f7; border-radius: 999px; padding: .12rem .6rem; font-size: .8rem;
+  }
+  .puce.attention { background: #fdf1dc; color: var(--alerte); }
+  .puce.erreur { background: #fdecea; color: var(--erreur); }
+  details { margin-top: .5rem; }
+  details ul { margin: .4rem 0 0 1rem; padding: 0; font-size: .85rem; color: #4b5563; }
+  .stats { font-size: .9rem; color: #46505c; }
+  .patiente { color: var(--bleu); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CAMWATER — Extraction automatique de factures</h1>
+  <p>Déposez vos scans (PDF, PNG, JPG) : les données sont lues, contrôlées et
+     ajoutées au fichier Excel général.</p>
+</header>
+
+<main>
+  <section>
+    <h2>1. Dépôt des factures</h2>
+    <form id="formulaire">
+      <div class="champs">
+        <div>
+          <label for="annee">Année (optionnel)</label>
+          <input type="number" id="annee" name="annee" min="2000" max="2100"
+                 placeholder="détectée automatiquement">
+        </div>
+        <div>
+          <label for="administration">Administration / ministère (optionnel)</label>
+          <input type="text" id="administration" name="administration"
+                 placeholder="repli si le mapping échoue — ex. MINSANTE">
+        </div>
+        <div>
+          <label for="utilisateur">Poste / agent (optionnel)</label>
+          <input type="text" id="utilisateur" name="utilisateur" placeholder="ex. poste-3">
+        </div>
+      </div>
+
+      <div class="depot" id="depot">
+        <strong>Cliquez ou glissez vos fichiers ici</strong>
+        <small>PDF, PNG ou JPG — plusieurs fichiers acceptés</small>
+        <input type="file" id="fichiers" name="fichiers" multiple accept=".pdf,.png,.jpg,.jpeg" hidden>
+      </div>
+      <ul id="liste-fichiers"></ul>
+
+      <div class="barre">
+        <button type="submit" id="envoyer" disabled>Traiter les factures</button>
+        <button type="button" class="secondaire" id="telecharger">Télécharger l'Excel général</button>
+      </div>
+    </form>
+  </section>
+
+  <section>
+    <h2>2. Résultats</h2>
+    <div id="resultats"><p class="stats">Aucun traitement pour l'instant.</p></div>
+  </section>
+
+  <section>
+    <h2>3. Fichier Excel général</h2>
+    <div id="stats" class="stats">Chargement…</div>
+  </section>
+</main>
+
+<script>
+const depot = document.getElementById('depot');
+const champFichiers = document.getElementById('fichiers');
+const liste = document.getElementById('liste-fichiers');
+const boutonEnvoyer = document.getElementById('envoyer');
+const zoneResultats = document.getElementById('resultats');
+let selection = [];
+
+function formaterTaille(octets) {
+  if (octets < 1024) return octets + ' o';
+  if (octets < 1048576) return (octets / 1024).toFixed(1) + ' Ko';
+  return (octets / 1048576).toFixed(1) + ' Mo';
+}
+
+function rafraichirListe() {
+  liste.innerHTML = '';
+  selection.forEach(f => {
+    const item = document.createElement('li');
+    item.textContent = `${f.name} — ${formaterTaille(f.size)}`;
+    liste.appendChild(item);
+  });
+  boutonEnvoyer.disabled = selection.length === 0;
+}
+
+depot.addEventListener('click', () => champFichiers.click());
+champFichiers.addEventListener('change', () => {
+  selection = Array.from(champFichiers.files);
+  rafraichirListe();
+});
+['dragenter', 'dragover'].forEach(evt =>
+  depot.addEventListener(evt, e => { e.preventDefault(); depot.classList.add('actif'); }));
+['dragleave', 'drop'].forEach(evt =>
+  depot.addEventListener(evt, e => { e.preventDefault(); depot.classList.remove('actif'); }));
+depot.addEventListener('drop', e => {
+  selection = Array.from(e.dataTransfer.files);
+  rafraichirListe();
+});
+
+document.getElementById('telecharger').addEventListener('click', () => {
+  window.location.href = '/api/excel';
+});
+
+function carteRapport(rapport) {
+  const stats = rapport.statistiques || {};
+  const anomalies = rapport.anomalies || [];
+  let classe = 'ok';
+  if (!rapport.succes) classe = 'erreur';
+  else if (stats.lignes_a_verifier || stats.lignes_illisibles || anomalies.length) classe = 'attention';
+
+  const carte = document.createElement('div');
+  carte.className = 'carte ' + classe;
+
+  const titre = document.createElement('h3');
+  titre.textContent = rapport.fichier || 'fichier';
+  carte.appendChild(titre);
+
+  if (!rapport.succes) {
+    const erreur = document.createElement('p');
+    erreur.textContent = 'Échec : ' + (rapport.erreur || 'erreur inconnue');
+    carte.appendChild(erreur);
+  } else {
+    const puces = document.createElement('div');
+    puces.className = 'puces';
+    const ajouter = (texte, variante) => {
+      const puce = document.createElement('span');
+      puce.className = 'puce' + (variante ? ' ' + variante : '');
+      puce.textContent = texte;
+      puces.appendChild(puce);
+    };
+    ajouter(`${stats.lignes_ecrites || 0} ligne(s) écrite(s)`);
+    ajouter(`${stats.lignes_ok || 0} conforme(s)`);
+    if (stats.lignes_a_verifier) ajouter(`${stats.lignes_a_verifier} à vérifier`, 'attention');
+    if (stats.lignes_illisibles) ajouter(`${stats.lignes_illisibles} illisible(s)`, 'erreur');
+    ajouter(`${rapport.pages || 0} page(s)`);
+    ajouter(`confiance ${(rapport.confiance_lecture ?? 0).toFixed(2)}`);
+    carte.appendChild(puces);
+  }
+
+  if (anomalies.length) {
+    const details = document.createElement('details');
+    const resume = document.createElement('summary');
+    resume.textContent = `${anomalies.length} anomalie(s) signalée(s)`;
+    details.appendChild(resume);
+    const ul = document.createElement('ul');
+    anomalies.slice(0, 60).forEach(a => {
+      const li = document.createElement('li');
+      li.textContent = a;
+      ul.appendChild(li);
+    });
+    details.appendChild(ul);
+    carte.appendChild(details);
+  }
+  return carte;
+}
+
+document.getElementById('formulaire').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (!selection.length) return;
+
+  const donnees = new FormData();
+  selection.forEach(f => donnees.append('fichiers', f));
+  ['annee', 'administration', 'utilisateur'].forEach(id => {
+    const valeur = document.getElementById(id).value.trim();
+    if (valeur) donnees.append(id, valeur);
+  });
+
+  boutonEnvoyer.disabled = true;
+  const libelle = boutonEnvoyer.textContent;
+  boutonEnvoyer.textContent = 'Traitement en cours…';
+  zoneResultats.innerHTML =
+    '<p class="patiente">Lecture des factures en cours — cela peut prendre ' +
+    'plusieurs dizaines de secondes par page.</p>';
+
+  try {
+    const reponse = await fetch('/api/upload', { method: 'POST', body: donnees });
+    const charge = await reponse.json();
+    zoneResultats.innerHTML = '';
+    const entete = document.createElement('p');
+    entete.className = 'stats';
+    entete.textContent =
+      `${charge.traites}/${charge.recus} facture(s) intégrée(s) — ` +
+      `${charge.lignes_ajoutees} ligne(s) ajoutée(s) au fichier général.`;
+    zoneResultats.appendChild(entete);
+    (charge.rapports || []).forEach(r => zoneResultats.appendChild(carteRapport(r)));
+    chargerStats();
+  } catch (erreur) {
+    zoneResultats.innerHTML =
+      '<div class="carte erreur"><h3>Erreur réseau</h3><p>' + erreur.message + '</p></div>';
+  } finally {
+    boutonEnvoyer.disabled = false;
+    boutonEnvoyer.textContent = libelle;
+  }
+});
+
+async function chargerStats() {
+  const zone = document.getElementById('stats');
+  try {
+    const reponse = await fetch('/api/stats');
+    const donnees = await reponse.json();
+    if (!donnees.existe) {
+      zone.textContent = 'Le fichier Excel général sera créé au premier traitement réussi.';
+      return;
+    }
+    const feuilles = (donnees.feuilles || [])
+      .map(f => `${f.nom} (${f.lignes})`).join(', ') || 'aucune';
+    zone.innerHTML =
+      `<p><strong>${donnees.chemin}</strong></p>` +
+      `<p>${donnees.lignes} ligne(s) au total · ${donnees.factures_traitees} facture(s) journalisée(s)` +
+      ` · ${formaterTaille(donnees.taille_octets || 0)}</p>` +
+      `<p>Feuilles : ${feuilles}</p>`;
+  } catch (erreur) {
+    zone.textContent = 'État du fichier indisponible : ' + erreur.message;
+  }
+}
+
+chargerStats();
+</script>
+</body>
+</html>

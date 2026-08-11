@@ -1,0 +1,29 @@
+# Environnements
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Secrets et configuration locale
+.env
+mapping_overrides.json
+
+# Données de travail (jamais versionnées : elles contiennent des factures réelles)
+data/uploads/*
+data/processed/*
+data/errors/*
+data/inbox/*
+data/output/*
+data/reports/*
+!data/**/.gitkeep
+
+# Journaux
+logs/*
+!logs/.gitkeep
+
+# Fichiers Excel temporaires
+~$*.xlsx
+*.xlsx.bak
+*.xlsx.lock

@@ -1,0 +1,23 @@
+# --- API et serveur ---------------------------------------------------------
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+python-multipart>=0.0.9        # upload de fichiers (multipart/form-data)
+aiofiles>=23.2                 # I/O fichiers non bloquantes
+
+# --- Lecture visuelle (LLM) -------------------------------------------------
+anthropic>=0.69                # SDK officiel Claude (vision + structured outputs)
+
+# --- Traitement des documents -----------------------------------------------
+pdf2image>=1.17                # conversion PDF -> PNG (nécessite poppler-utils)
+pillow>=10.3                   # manipulation d'images
+
+# --- Excel ------------------------------------------------------------------
+openpyxl>=3.1                  # lecture/écriture du classeur de pointage
+
+# --- Utilitaires ------------------------------------------------------------
+filelock>=3.13                 # verrou inter-processus sur le fichier Excel
+python-dotenv>=1.0             # chargement du fichier .env
+
+# --- Tests (optionnels en production) ---------------------------------------
+pytest>=8.0
+httpx>=0.27                    # client de test FastAPI
