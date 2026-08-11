@@ -25,6 +25,27 @@ export ANTHROPIC_API_KEY=sk-ant-...
 python app.py
 ```
 
+### Windows — le plus simple : `demarrer.bat`
+
+**Double-cliquez sur `demarrer.bat`** à la racine du projet. Le script enchaîne
+tout seul : détection de Python, création du venv, installation des
+dépendances, demande de la clé API si elle manque (enregistrée dans `.env`),
+puis démarrage du serveur. Rien à taper, aucune syntaxe de shell à connaître.
+
+Depuis PowerShell, si vous préférez :
+
+```powershell
+.\demarrer.bat            # démarrage normal
+.\demarrer.bat -Tests     # vérifie l'installation via les 92 tests, sans clé API
+```
+
+Le `.bat` appelle `demarrer.ps1` avec `-ExecutionPolicy Bypass`, ce qui évite le
+blocage « l'exécution de scripts est désactivée sur ce système ». Les
+dépendances ne sont réinstallées que si `requirements.txt` a changé, donc les
+démarrages suivants sont immédiats.
+
+Les sections ci-dessous décrivent la procédure manuelle équivalente.
+
 ### Windows — prérequis : Python
 
 **Commencez par vérifier si Python est déjà présent**, avant toute
@@ -156,6 +177,8 @@ Puis ouvrez **<http://localhost:8000/>** et déposez vos factures.
 ```
 camwaterapp/
 ├── app.py                      # point d'entrée : python app.py
+├── demarrer.bat                # Windows : double-clic, tout s'enchaîne
+├── demarrer.ps1                # script appelé par demarrer.bat
 ├── requirements.txt
 ├── README.md
 ├── .env.example                # modèle de configuration (à copier en .env)
