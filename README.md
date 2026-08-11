@@ -551,7 +551,9 @@ en bout (succès, doublon refusé, échec de lecture, écart de totaux).
 | `Le jeton « && » n'est pas un séparateur d'instruction valide` | Commandes bash recopiées dans PowerShell — utilisez la section PowerShell du §1 |
 | `.\venv\Scripts\Activate.ps1 n'est pas reconnu` | Le venv n'a pas été créé (Python absent), ou vous n'êtes pas dans le dossier du projet |
 | `l'exécution de scripts est désactivée sur ce système` | Stratégie d'exécution PowerShell — utilisez `.\venv\Scripts\python.exe app.py` sans activer le venv |
-| `Could not resolve authentication method` | `ANTHROPIC_API_KEY` absent — exportez la clé ou utilisez `ant auth login` |
+| `Le crédit du compte API Anthropic est épuisé` | Achetez des crédits sur <https://platform.claude.com> → **Plans & Billing**. La clé est valide, seul le solde est en cause |
+| `Aucune clé API n'est configurée` | Renseignez `ANTHROPIC_API_KEY` dans `.env` (voir §7), ou relancez `demarrer.bat` qui la demande |
+| `La clé API est invalide ou a été révoquée` | Créez une nouvelle clé sur <https://platform.claude.com> → Settings → API keys |
 | `… est verrouillé par une autre application` | Le classeur est ouvert dans Excel : fermez-le et relancez (aucune ligne n'a été écrite) |
 | `poppler-utils absent` dans les journaux | Installez poppler pour la conversion 200 DPI ; sinon le PDF est lu nativement (dégradé mais fonctionnel) |
 | `Impossible d'ouvrir … xlsx` | Le classeur est ouvert dans Excel : fermez-le. Une sauvegarde `.xlsx.bak` est disponible |

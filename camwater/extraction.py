@@ -262,6 +262,59 @@ def _texte_reponse(message: Any) -> str:
     return "".join(bloc.text for bloc in message.content if bloc.type == "text")
 
 
+#: Erreurs qu'un nouvel essai ne résoudra jamais : inutile de réessayer, et le
+#: message brut de l'API (JSON anglais) est incompréhensible pour un agent.
+#: Chaque entrée associe un motif du message d'erreur à une consigne d'action.
+_ERREURS_DEFINITIVES: tuple[tuple[str, str], ...] = (
+    (
+        "credit balance is too low",
+        "Le crédit du compte API Anthropic est épuisé. Rechargez-le sur "
+        "https://platform.claude.com (Plans & Billing), puis relancez le traitement. "
+        "La clé API est valide : seul le solde est en cause.",
+    ),
+    (
+        "could not resolve authentication",
+        "Aucune clé API n'est configurée. Renseignez ANTHROPIC_API_KEY dans le "
+        "fichier .env à la racine du projet, puis relancez l'application.",
+    ),
+    (
+        "invalid x-api-key",
+        "La clé API est invalide ou a été révoquée. Vérifiez ANTHROPIC_API_KEY "
+        "dans le fichier .env, ou créez une nouvelle clé sur "
+        "https://platform.claude.com (Settings → API keys).",
+    ),
+    (
+        "authentication_error",
+        "Échec d'authentification auprès de l'API Anthropic. Vérifiez la clé "
+        "ANTHROPIC_API_KEY dans le fichier .env.",
+    ),
+    (
+        "permission_error",
+        "La clé API n'a pas les droits nécessaires pour ce modèle "
+        f"({LLM_MODEL}). Vérifiez les permissions de la clé sur "
+        "https://platform.claude.com.",
+    ),
+    (
+        "not_found_error",
+        f"Le modèle « {LLM_MODEL} » est introuvable. Corrigez CAMWATER_MODEL "
+        "dans le fichier .env.",
+    ),
+)
+
+
+def _erreur_definitive(exc: Exception) -> Optional[str]:
+    """Retourne un message d'action si l'erreur ne peut pas se résoudre d'elle-même.
+
+    Réessayer une erreur de crédit ou de clé est inutile : cela retarde
+    l'affichage du vrai problème sans aucune chance de succès.
+    """
+    texte = str(exc).lower()
+    for motif, consigne in _ERREURS_DEFINITIVES:
+        if motif in texte:
+            return consigne
+    return None
+
+
 def extraire_page(page: Page, contexte: str = "") -> PageExtraite:
     """Soumet une page au modèle et retourne les données transcrites.
 
@@ -338,6 +391,14 @@ def extraire_page(page: Page, contexte: str = "") -> PageExtraite:
                 exc,
             )
         except Exception as exc:  # erreurs réseau / API
+            # Une erreur de crédit, de clé ou de droits ne se résoudra pas en
+            # réessayant : on remonte immédiatement une consigne d'action, sans
+            # faire patienter l'utilisateur ni noyer la cause dans du JSON.
+            consigne = _erreur_definitive(exc)
+            if consigne:
+                logger.error("Erreur bloquante d'accès à l'API : %s", exc)
+                raise ExtractionError(consigne) from exc
+
             derniere_erreur = exc
             logger.warning(
                 "Échec d'appel au modèle pour la page %d (tentative %d/%d) : %s",
