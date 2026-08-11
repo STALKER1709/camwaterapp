@@ -197,6 +197,14 @@ def construire_lignes(
     for numero, brut in enumerate(facture.lignes, start=1):
         calcul = calculer_ligne(brut)
         nom_abonne = _texte(brut.get("nom_abonne"))
+
+        # Certaines factures récapitulatives portent un compte par ligne. Une
+        # valeur vide signifie « pas de colonne compte dans ce tableau » : on
+        # reprend alors celui de l'en-tête. ILLISIBLE, en revanche, signifie
+        # que la colonne existe mais n'est pas déchiffrable : la ligne restera
+        # sans compte, donc écartée du pointage.
+        compte_ligne = _texte(brut.get("compte_client"))
+        compte = compte_ligne if compte_ligne is not None else compte_client
         affectation = resoudre_ministere(nom_abonne, nom_client, administration)
 
         ligne = LigneFacture(
@@ -207,7 +215,7 @@ def construire_lignes(
                 "DR": dr,
                 "Agence": agence,
                 "Période": periode,
-                "Compte client": compte_client,
+                "Compte client": compte,
                 "Nom du client": nom_client,
                 "Ville": ville,
                 "Code abonnement (PL)": _texte(brut.get("code_abonnement")),
@@ -286,6 +294,23 @@ def traiter_fichier(
 
         rapport.lignes = construire_lignes(facture, annee=annee, administration=administration)
         valider_rapport(rapport)
+
+        # Contrôle de doublon **métier**, après lecture : l'empreinte SHA-256
+        # ne repère que le même fichier, alors qu'un re-scan ou un recadrage de
+        # la même facture produit un fichier différent. L'identité réelle d'une
+        # facture est le couple (compte client, période).
+        if REJETER_DOUBLONS:
+            deja_presentes = excel.facture_deja_presente(rapport.lignes)
+            if deja_presentes:
+                details = ", ".join(
+                    f"compte {compte} sur {periode}" for compte, periode in deja_presentes
+                )
+                raise PipelineError(
+                    f"Facture déjà présente dans le fichier général ({details}). "
+                    "Aucune ligne n'a été ajoutée pour éviter un doublon. "
+                    "Si cette facture est bien nouvelle, vérifiez le compte client "
+                    "et la période lus sur le document."
+                )
 
         rapport.lignes_ecrites = excel.ajouter_lignes(
             rapport.lignes,

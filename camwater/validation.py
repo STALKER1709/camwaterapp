@@ -4,12 +4,15 @@ Politique « zéro erreur tolérée » : aucune ligne n'est écartée silencieus
 Une valeur douteuse est soit **reconstruite par formule** (et marquée comme
 dérivée), soit **signalée** — jamais devinée.
 
-Trois niveaux de statut par ligne :
+Quatre niveaux de statut par ligne :
 
 * ``OK``          — toutes les colonnes obligatoires présentes et cohérentes ;
 * ``À_VÉRIFIER``  — écart de total, ministère indéterminé, valeur dérivée dont
                     la source était douteuse : la ligne est écrite mais signalée ;
-* ``ILLISIBLE``   — une donnée obligatoire est absente et non reconstructible.
+* ``ILLISIBLE``   — une donnée obligatoire est absente et non reconstructible ;
+* ``ÉCARTÉE``     — ligne nulle, faute de numéro de compte client : exclue du
+                    pointage et de tous les totaux, mais conservée dans la
+                    feuille « Lignes écartées » pour contrôle.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from .calculs import arrondi, parse_nombre
 from .config import (
     COLONNES_OBLIGATOIRES,
     MARQUEUR_A_VERIFIER,
+    MARQUEUR_ECARTEE,
     MARQUEUR_ILLISIBLE,
     REPORT_DIR,
     TAUX_TVA,
@@ -54,6 +58,24 @@ def valider_ligne(ligne: LigneFacture) -> LigneFacture:
     (HT + TVA = TTC, taux de TVA), plausibilité des index et du ministère.
     """
     valeurs = ligne.valeurs
+
+    # 0. Numéro de compte : sans lui, la ligne est nulle -------------------- #
+    # Contrôle prioritaire : une ligne sans compte client n'est rattachable à
+    # aucun abonné, donc inexploitable pour le pointage. Elle est écartée
+    # (conservée dans une feuille dédiée, jamais supprimée) et n'entre dans
+    # aucun total. Les contrôles suivants sont inutiles sur une telle ligne.
+    compte = valeurs.get("Compte client")
+    compte_absent = (
+        compte is None
+        or (isinstance(compte, str) and not compte.strip())
+        or str(compte).strip().upper() == MARQUEUR_ILLISIBLE
+    )
+    if compte_absent:
+        ligne.marquer(
+            MARQUEUR_ECARTEE,
+            "Ligne nulle : aucun numéro de compte client — écartée du pointage",
+        )
+        return ligne
 
     # 1. Colonnes obligatoires -------------------------------------------- #
     for colonne in COLONNES_OBLIGATOIRES:
@@ -150,9 +172,11 @@ def controler_totaux(
     """Somme les lignes et compare aux totaux lus en pied de facture."""
     controle = ControleTotaux()
 
-    somme_ht = sum((ligne.montant("Montant HT") for ligne in lignes), Decimal(0))
-    somme_tva = sum((ligne.montant("TVA") for ligne in lignes), Decimal(0))
-    somme_ttc = sum((ligne.montant("Montant TTC") for ligne in lignes), Decimal(0))
+    # Une ligne écartée est nulle : elle ne compte dans aucun total.
+    retenues = [ligne for ligne in lignes if ligne.statut != MARQUEUR_ECARTEE]
+    somme_ht = sum((ligne.montant("Montant HT") for ligne in retenues), Decimal(0))
+    somme_tva = sum((ligne.montant("TVA") for ligne in retenues), Decimal(0))
+    somme_ttc = sum((ligne.montant("Montant TTC") for ligne in retenues), Decimal(0))
     controle.calcules = {"HT": somme_ht, "TVA": somme_tva, "TTC": somme_ttc}
     controle.lus = {
         "HT": parse_nombre(total_ht),
@@ -162,7 +186,7 @@ def controler_totaux(
 
     # Une ligne illisible fausse mécaniquement la somme : on le dit plutôt que
     # de conclure à un écart de saisie.
-    lignes_illisibles = sum(1 for ligne in lignes if ligne.statut == MARQUEUR_ILLISIBLE)
+    lignes_illisibles = sum(1 for ligne in retenues if ligne.statut == MARQUEUR_ILLISIBLE)
 
     for cle, somme in controle.calcules.items():
         lu = controle.lus.get(cle)

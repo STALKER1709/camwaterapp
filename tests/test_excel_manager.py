@@ -81,10 +81,12 @@ def test_ajout_successif_et_resume(tmp_path):
 
     resume = classeur[FEUILLE_RESUME]
     lignes_resume = list(resume.iter_rows(min_row=2, values_only=True))
+    # Colonnes : Administration | Période | État | Nb lignes | Conso | HT | ...
     assert lignes_resume[0][0] == "MINSANTE"
     assert lignes_resume[0][1] == "mars-2026"
-    assert lignes_resume[0][2] == 3                  # nb lignes
-    assert lignes_resume[0][4] == 3 * 39200          # montant HT cumulé
+    assert lignes_resume[0][2] == "Reçue"
+    assert lignes_resume[0][3] == 3                  # nb lignes
+    assert lignes_resume[0][5] == 3 * 39200          # montant HT cumulé
     assert lignes_resume[-1][0] == "TOTAL GÉNÉRAL"
 
     journal = classeur[FEUILLE_JOURNAL]

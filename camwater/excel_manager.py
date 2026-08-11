@@ -33,22 +33,27 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .config import (
+    CLE_FACTURE,
     COLONNES,
     COLONNES_NUMERIQUES,
+    COMPLETER_MOIS_MANQUANTS,
     EXCEL_LOCK_PATH,
     EXCEL_PATH,
     FEUILLE_ANOMALIES,
+    FEUILLE_ECARTEES,
     FEUILLE_JOURNAL,
     FEUILLE_RESUME,
     FEUILLE_UNIQUE,
     MARQUEUR_A_VERIFIER,
+    MARQUEUR_ECARTEE,
     MARQUEUR_ILLISIBLE,
 )
 from .models import STATUT_OK, LigneFacture
+from .periodes import mois_manquants, periode_vers_cle
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ExcelManager", "ExcelError", "nom_feuille"]
+__all__ = ["ExcelManager", "ExcelError", "identites_facture", "nom_feuille"]
 
 
 class ExcelError(RuntimeError):
@@ -64,6 +69,8 @@ _ENTETE_FOND = PatternFill("solid", fgColor="1F4E79")
 _ENTETE_ALIGNEMENT = Alignment(horizontal="center", vertical="center", wrap_text=True)
 _FOND_A_VERIFIER = PatternFill("solid", fgColor="FFF2CC")
 _FOND_ILLISIBLE = PatternFill("solid", fgColor="F8CBAD")
+_FOND_ECARTEE = PatternFill("solid", fgColor="E7E6E6")
+_FOND_MOIS_MANQUANT = PatternFill("solid", fgColor="FCE4EC")
 _FORMAT_NOMBRE = "#,##0"
 _LARGEURS = {
     "DR": 14,
@@ -78,6 +85,24 @@ _LARGEURS = {
     "Ministère_2026": 18,
 }
 
+#: En-tête de la feuille Résumé. « État » distingue un mois effectivement
+#: pointé d'un mois pour lequel aucune facture n'a été reçue.
+_ENTETES_RESUME = (
+    "Administration",
+    "Période",
+    "État",
+    "Nb lignes",
+    "Consommation (m³)",
+    "Montant HT",
+    "TVA",
+    "Montant TTC",
+    "Lignes à vérifier",
+    "Lignes illisibles",
+)
+
+ETAT_RECUE = "Reçue"
+ETAT_MANQUANTE = "MANQUANTE"
+
 #: Colonnes techniques ajoutées après les 17 colonnes standard.
 COLONNES_TECHNIQUES = ("Statut", "Fichier source", "Anomalies")
 
@@ -91,6 +116,24 @@ def nom_feuille(administration: str) -> str:
     nom = nom.replace("'", "").strip() or MARQUEUR_A_VERIFIER
     nom = _CARACTERES_INTERDITS.sub("-", nom)
     return nom[:31]
+
+
+def identites_facture(lignes: Iterable[LigneFacture]) -> set[tuple[str, str]]:
+    """Couples (compte client, période) portés par un lot de lignes.
+
+    C'est l'identité **métier** d'une facture : un même compte facturé sur une
+    même période est la même facture, quel que soit le fichier scanné qui la
+    porte. Les lignes écartées (sans compte) n'ont pas d'identité.
+    """
+    identites: set[tuple[str, str]] = set()
+    for ligne in lignes:
+        if ligne.statut == MARQUEUR_ECARTEE:
+            continue
+        compte = str(ligne.valeurs.get(CLE_FACTURE[0]) or "").strip()
+        periode = str(ligne.valeurs.get(CLE_FACTURE[1]) or "").strip()
+        if compte and periode:
+            identites.add((compte, periode))
+    return identites
 
 
 def _verrou_fichier():
@@ -190,17 +233,7 @@ class ExcelManager:
         feuille = classeur.create_sheet(FEUILLE_RESUME, 0)
         self._styliser_entete(
             feuille,
-            (
-                "Administration",
-                "Période",
-                "Nb lignes",
-                "Consommation (m³)",
-                "Montant HT",
-                "TVA",
-                "Montant TTC",
-                "Lignes à vérifier",
-                "Lignes illisibles",
-            ),
+            _ENTETES_RESUME,
         )
         return feuille
 
@@ -220,6 +253,11 @@ class ExcelManager:
         )
         return feuille
 
+    def _creer_feuille_ecartees(self, classeur: Workbook) -> Worksheet:
+        feuille = classeur.create_sheet(FEUILLE_ECARTEES)
+        self._styliser_entete(feuille, list(COLONNES) + list(COLONNES_TECHNIQUES))
+        return feuille
+
     def _creer_feuille_journal(self, classeur: Workbook) -> Worksheet:
         feuille = classeur.create_sheet(FEUILLE_JOURNAL)
         self._styliser_entete(
@@ -229,10 +267,13 @@ class ExcelManager:
                 "Fichier source",
                 "Empreinte SHA-256",
                 "Utilisateur",
+                "Compte client",
+                "Période",
                 "Pages",
                 "Lignes écrites",
                 "Lignes à vérifier",
                 "Lignes illisibles",
+                "Lignes écartées",
                 "Confiance",
             ),
         )
@@ -247,11 +288,13 @@ class ExcelManager:
             return self._creer_feuille_anomalies(classeur)
         if nom == FEUILLE_JOURNAL:
             return self._creer_feuille_journal(classeur)
+        if nom == FEUILLE_ECARTEES:
+            return self._creer_feuille_ecartees(classeur)
         return self._creer_feuille_donnees(classeur, nom)
 
     @staticmethod
     def _feuilles_donnees(classeur: Workbook) -> list[Worksheet]:
-        reservees = {FEUILLE_RESUME, FEUILLE_ANOMALIES, FEUILLE_JOURNAL}
+        reservees = {FEUILLE_RESUME, FEUILLE_ANOMALIES, FEUILLE_JOURNAL, FEUILLE_ECARTEES}
         return [classeur[nom] for nom in classeur.sheetnames if nom not in reservees]
 
     # -- Écriture ---------------------------------------------------------- #
@@ -277,7 +320,9 @@ class ExcelManager:
                     cellule.number_format = _FORMAT_NOMBRE
 
         fond = None
-        if ligne.statut == MARQUEUR_ILLISIBLE:
+        if ligne.statut == MARQUEUR_ECARTEE:
+            fond = _FOND_ECARTEE
+        elif ligne.statut == MARQUEUR_ILLISIBLE:
             fond = _FOND_ILLISIBLE
         elif ligne.statut == MARQUEUR_A_VERIFIER:
             fond = _FOND_A_VERIFIER
@@ -316,16 +361,20 @@ class ExcelManager:
         confiance: float,
     ) -> None:
         feuille = self._feuille(classeur, FEUILLE_JOURNAL)
+        identites = identites_facture(lignes)
         feuille.append(
             [
                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 fichier,
                 empreinte,
                 utilisateur or "-",
+                " ; ".join(sorted({c for c, _ in identites})) or "-",
+                " ; ".join(sorted({p for _, p in identites})) or "-",
                 pages,
                 len(lignes),
                 sum(1 for l in lignes if l.statut == MARQUEUR_A_VERIFIER),
                 sum(1 for l in lignes if l.statut == MARQUEUR_ILLISIBLE),
+                sum(1 for l in lignes if l.statut == MARQUEUR_ECARTEE),
                 round(confiance, 3),
             ]
         )
@@ -338,20 +387,7 @@ class ExcelManager:
         else:
             index = 0
         feuille = classeur.create_sheet(FEUILLE_RESUME, index)
-        self._styliser_entete(
-            feuille,
-            (
-                "Administration",
-                "Période",
-                "Nb lignes",
-                "Consommation (m³)",
-                "Montant HT",
-                "TVA",
-                "Montant TTC",
-                "Lignes à vérifier",
-                "Lignes illisibles",
-            ),
-        )
+        self._styliser_entete(feuille, _ENTETES_RESUME)
 
         positions = {colonne: i for i, colonne in enumerate(COLONNES)}
         position_statut = len(COLONNES)
@@ -395,11 +431,51 @@ class ExcelManager:
                 elif statut == MARQUEUR_ILLISIBLE:
                     agregat["illisible"] += 1
 
-        for (administration, periode), agregat in sorted(agregats.items()):
+        # Compléter avec les mois sans facture : sur une étendue de plusieurs
+        # mois, un mois absent du classeur est invisible sans cela. On borne
+        # l'étendue par la plus ancienne et la plus récente période **du
+        # classeur entier**, afin que chaque administration montre ses propres
+        # manques sur la même période de référence.
+        manquants: list[tuple[str, str]] = []
+        if COMPLETER_MOIS_MANQUANTS and agregats:
+            # Référentiel : tous les mois pointés, plus les trous de calendrier
+            # entre le plus ancien et le plus récent. Deux manques distincts
+            # sont ainsi couverts — un mois où *aucune* facture n'est arrivée,
+            # et un mois où telle administration n'a rien envoyé alors qu'une
+            # autre a été pointée.
+            reference = {periode for _, periode in agregats}
+            reference.update(mois_manquants(reference))
+            for administration in {adm for adm, _ in agregats}:
+                pointees = {p for adm, p in agregats if adm == administration}
+                manquants.extend(
+                    (administration, periode)
+                    for periode in reference
+                    if periode not in pointees
+                )
+
+        lignes_resume: list[tuple[str, str, str, dict[str, float]]] = [
+            (administration, periode, ETAT_RECUE, agregat)
+            for (administration, periode), agregat in agregats.items()
+        ]
+        vide = dict.fromkeys(
+            ("lignes", "consommation", "ht", "tva", "ttc", "a_verifier", "illisible"), 0.0
+        )
+        lignes_resume.extend(
+            (administration, periode, ETAT_MANQUANTE, vide)
+            for administration, periode in sorted(set(manquants))
+        )
+
+        def _ordre(entree: tuple[str, str, str, dict[str, float]]):
+            administration, periode, _, _ = entree
+            cle = periode_vers_cle(periode)
+            return (administration, cle or (9999, 99), periode)
+
+        for administration, periode, etat, agregat in sorted(lignes_resume, key=_ordre):
             feuille.append(
                 [
                     administration,
                     periode,
+                    etat,
                     int(agregat["lignes"]),
                     agregat["consommation"],
                     agregat["ht"],
@@ -409,11 +485,15 @@ class ExcelManager:
                     int(agregat["illisible"]),
                 ]
             )
+            if etat == ETAT_MANQUANTE:
+                for index in range(1, len(_ENTETES_RESUME) + 1):
+                    feuille.cell(row=feuille.max_row, column=index).fill = _FOND_MOIS_MANQUANT
 
         if agregats:
             feuille.append(
                 [
                     "TOTAL GÉNÉRAL",
+                    "",
                     "",
                     int(sum(a["lignes"] for a in agregats.values())),
                     sum(a["consommation"] for a in agregats.values()),
@@ -424,11 +504,11 @@ class ExcelManager:
                     int(sum(a["illisible"] for a in agregats.values())),
                 ]
             )
-            for index in range(1, 10):
+            for index in range(1, len(_ENTETES_RESUME) + 1):
                 feuille.cell(row=feuille.max_row, column=index).font = Font(bold=True)
 
         for ligne_index in range(2, feuille.max_row + 1):
-            for colonne_index in range(4, 8):
+            for colonne_index in range(5, 9):
                 feuille.cell(row=ligne_index, column=colonne_index).number_format = _FORMAT_NOMBRE
 
     # -- API publique ------------------------------------------------------ #
@@ -452,6 +532,48 @@ class ExcelManager:
             classeur.close()
         return None
 
+    def factures_presentes(self) -> set[tuple[str, str]]:
+        """Couples (compte client, période) déjà écrits dans le classeur.
+
+        Lus dans les feuilles de données, qui font foi : le Journal peut avoir
+        été purgé, les lignes réellement présentes non.
+        """
+        if not self.chemin.exists():
+            return set()
+        try:
+            classeur = load_workbook(self.chemin, read_only=True, data_only=True)
+        except Exception as exc:
+            logger.warning("Classeur illisible (%s) : contrôle de doublon ignoré.", exc)
+            return set()
+
+        position_compte = COLONNES.index(CLE_FACTURE[0])
+        position_periode = COLONNES.index(CLE_FACTURE[1])
+        presentes: set[tuple[str, str]] = set()
+        try:
+            for onglet in self._feuilles_donnees(classeur):
+                for valeurs in onglet.iter_rows(min_row=2, values_only=True):
+                    if not valeurs or len(valeurs) <= position_periode:
+                        continue
+                    compte = str(valeurs[position_compte] or "").strip()
+                    periode = str(valeurs[position_periode] or "").strip()
+                    if compte and periode:
+                        presentes.add((compte, periode))
+        finally:
+            classeur.close()
+        return presentes
+
+    def facture_deja_presente(
+        self, lignes: Iterable[LigneFacture]
+    ) -> list[tuple[str, str]]:
+        """Identités de facture déjà présentes dans le classeur.
+
+        Complète le contrôle par empreinte SHA-256, qui ne détecte que le même
+        fichier : un re-scan, un recadrage ou un simple changement de nom
+        produisent un fichier différent pour la **même** facture.
+        """
+        presentes = self.factures_presentes()
+        return sorted(identites_facture(lignes) & presentes)
+
     def ajouter_lignes(
         self,
         lignes: list[LigneFacture],
@@ -473,7 +595,13 @@ class ExcelManager:
         with _verrou_fichier():
             classeur = self._charger()
             for ligne in lignes:
-                cible = nom_feuille(FEUILLE_UNIQUE or ligne.administration)
+                # Une ligne sans numéro de compte est nulle : elle est rangée à
+                # part, hors des feuilles par ministère, donc hors de tous les
+                # totaux — mais jamais supprimée.
+                if ligne.statut == MARQUEUR_ECARTEE:
+                    cible = FEUILLE_ECARTEES
+                else:
+                    cible = nom_feuille(FEUILLE_UNIQUE or ligne.administration)
                 self._ecrire_ligne(self._feuille(classeur, cible), ligne, fichier)
 
             self._ajouter_anomalies(classeur, lignes, fichier)

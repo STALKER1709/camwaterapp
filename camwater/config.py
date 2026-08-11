@@ -123,6 +123,11 @@ TOLERANCE_MONTANT = Decimal(os.getenv("CAMWATER_TOLERANCE", "1"))
 MARQUEUR_ILLISIBLE = "ILLISIBLE"
 MARQUEUR_A_VERIFIER = "À_VÉRIFIER"
 
+#: Ligne écartée du pointage : sans numéro de compte client, une ligne de
+#: facture est nulle. Elle n'est ni comptabilisée ni intégrée aux feuilles par
+#: ministère, mais conservée à part pour contrôle (jamais supprimée).
+MARQUEUR_ECARTEE = "ÉCARTÉE"
+
 #: Les 17 colonnes standard, dans l'ordre exact du fichier de pointage.
 COLONNES = (
     "DR",
@@ -175,6 +180,16 @@ COLONNES_OBLIGATOIRES = (
 FEUILLE_RESUME = "Résumé"
 FEUILLE_ANOMALIES = "Anomalies"
 FEUILLE_JOURNAL = "Journal"
+FEUILLE_ECARTEES = "Lignes écartées"
+
+#: Colonne identifiant une facture au sens métier : deux factures partageant le
+#: même compte client et la même période sont un doublon, même si les fichiers
+#: scannés diffèrent (re-scan, recadrage, autre nom de fichier).
+CLE_FACTURE = ("Compte client", "Période")
+
+#: Compléter le Résumé avec les mois sans facture, entre la plus ancienne et la
+#: plus récente période présente, pour rendre les manques visibles.
+COMPLETER_MOIS_MANQUANTS = _env_bool("CAMWATER_COMPLETER_MOIS", True)
 
 #: Feuille unique si l'on ne veut pas ventiler par administration.
 FEUILLE_UNIQUE = os.getenv("CAMWATER_FEUILLE_UNIQUE", "").strip()

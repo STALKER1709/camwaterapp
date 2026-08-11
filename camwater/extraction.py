@@ -77,6 +77,11 @@ TA MISSION : transcrire fidèlement, sans rien calculer et sans rien inventer.
 
 2. TOUTES LES LIGNES du tableau de facturation, sans exception, dans l'ordre
    d'apparition, y compris les lignes à consommation nulle. Pour chacune :
+   • compte_client     — numéro de compte client **si le tableau porte une
+                         colonne compte par ligne**. Si la facture ne donne le
+                         compte que dans l'en-tête, laisse "" : il sera repris
+                         de l'en-tête. Mets "ILLISIBLE" seulement si la colonne
+                         existe et que la valeur est indéchiffrable.
    • code_abonnement   — code d'abonnement, dit « PL »
    • nom_abonne        — libellé de l'abonné (souvent le service ou l'entité)
    • numero_compteur   — numéro de compteur
@@ -140,6 +145,7 @@ def _objet(proprietes: dict[str, Any]) -> dict[str, Any]:
 
 SCHEMA_LIGNE = _objet(
     {
+        "compte_client": _CHAINE,
         "code_abonnement": _CHAINE,
         "nom_abonne": _CHAINE,
         "numero_compteur": _CHAINE,

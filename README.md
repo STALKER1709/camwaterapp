@@ -296,10 +296,11 @@ python tools/generer_exemple_excel.py
 
 | Feuille | Contenu |
 |---|---|
-| `Résumé` | Totaux par **administration × période** : nb lignes, consommation, HT, TVA, TTC, lignes à vérifier, lignes illisibles, plus une ligne `TOTAL GÉNÉRAL`. Reconstruite intégralement à chaque écriture. |
+| `Résumé` | Totaux par **administration × période** : état, nb lignes, consommation, HT, TVA, TTC, lignes à vérifier, lignes illisibles, plus une ligne `TOTAL GÉNÉRAL`. **Les mois sans facture y figurent** avec l'état `MANQUANTE` (voir §4.3). Reconstruite intégralement à chaque écriture. |
 | *une feuille par ministère* (`MINSANTE`, `MINESEC`, `DGSN`, …) | Les lignes de facturation, 17 colonnes standard + 3 colonnes techniques |
 | `Anomalies` | Une ligne par anomalie : fichier source, feuille, statut, compte client, code abonnement, nom abonné, description |
-| `Journal` | Une ligne par facture intégrée : horodatage, fichier, **empreinte SHA-256**, utilisateur, pages, lignes écrites/à vérifier/illisibles, confiance de lecture |
+| `Lignes écartées` | Les lignes **sans numéro de compte client**, nulles pour le pointage (voir §5.5). Conservées avec leurs 17 colonnes pour contrôle, mais exclues des feuilles par ministère et de tous les totaux |
+| `Journal` | Une ligne par facture intégrée : horodatage, fichier, **empreinte SHA-256**, utilisateur, **compte client**, **période**, pages, lignes écrites/à vérifier/illisibles/écartées, confiance de lecture |
 
 Pour une **feuille unique** avec une colonne « Administration » plutôt qu'une
 feuille par ministère, définir `CAMWATER_FEUILLE_UNIQUE=Pointage` : la colonne
@@ -328,8 +329,26 @@ feuille par ministère, définir `CAMWATER_FEUILLE_UNIQUE=Pointage` : la colonne
 | 17 | Montant TTC | Nombre |
 
 Trois colonnes techniques suivent, pour l'audit : **Statut**
-(`OK` / `À_VÉRIFIER` / `ILLISIBLE`), **Fichier source**, **Anomalies**.
-Les lignes à vérifier sont surlignées en jaune, les lignes illisibles en orange.
+(`OK` / `À_VÉRIFIER` / `ILLISIBLE` / `ÉCARTÉE`), **Fichier source**, **Anomalies**.
+Les lignes à vérifier sont surlignées en jaune, les illisibles en orange, les
+écartées en gris.
+
+### 4.3 Les mois sans facture apparaissent au Résumé
+
+Un mois pour lequel aucune facture n'est arrivée serait invisible : il
+n'existerait tout simplement aucune ligne. Le Résumé le fait donc apparaître
+explicitement, sur fond rosé, avec l'état `MANQUANTE` et des totaux à zéro.
+
+Deux manques distincts sont couverts :
+
+* **un trou de calendrier** — janvier et mars pointés, février absent partout ;
+* **une administration absente sur un mois** couvert par une autre — MINSANTE
+  reçue en février, MINESEC non.
+
+L'étendue de référence va de la plus ancienne à la plus récente période présente
+dans le classeur : le Résumé répond ainsi directement à la question « quelles
+factures nous manque-t-il ? ». Les lignes `MANQUANTE` portent des zéros et
+n'entrent donc dans aucun total. Désactivable par `CAMWATER_COMPLETER_MOIS=false`.
 
 ---
 
@@ -413,6 +432,14 @@ Aucune ligne n'est écartée en silence. Chaque ligne reçoit un statut :
 | `OK` | Colonnes obligatoires présentes, arithmétique cohérente, ministère identifié |
 | `À_VÉRIFIER` | Écrite mais signalée : écart de total, TVA incohérente, index contradictoires, ministère indéterminé, entité hors périmètre |
 | `ILLISIBLE` | Une donnée obligatoire est absente et non reconstructible |
+| `ÉCARTÉE` | **Ligne nulle, faute de numéro de compte client.** Exclue du pointage et de tous les totaux, rangée dans la feuille `Lignes écartées` — jamais supprimée |
+
+**La règle du numéro de compte prime sur tous les autres contrôles.** Sans
+compte client, une ligne n'est rattachable à aucun abonné : elle est donc nulle,
+et les contrôles arithmétiques ou de mapping n'ont plus de sens. Le compte est
+lu **au niveau de la ligne** lorsque le tableau en porte un (factures
+récapitulatives multi-comptes), sinon repris de l'en-tête. Une colonne compte
+présente mais indéchiffrable écarte **cette seule ligne**, pas la facture.
 
 Contrôles effectués : colonnes obligatoires, `HT + TVA = TTC`,
 `TVA = ARRONDI(HT × 0,1925)`, `Index nouvel − Index ancien = Consommation`,
@@ -431,9 +458,15 @@ totaux lus vs recalculés, anomalies, détail ligne à ligne).
   secours `.xlsx.bak` est conservée.
 * **Concurrence** — un verrou fichier (`filelock`) sérialise les écritures
   venant de plusieurs postes ou requêtes simultanées.
-* **Doublons** — l'empreinte SHA-256 de chaque facture est journalisée ; un
-  fichier au contenu déjà intégré est refusé (même sous un autre nom).
-  Désactivable avec `CAMWATER_REJETER_DOUBLONS=false`.
+* **Doublons, à deux niveaux** — d'abord l'**empreinte SHA-256** du fichier,
+  contrôlée *avant* tout appel au modèle : un fichier déjà intégré est refusé
+  sans frais. Puis, après lecture, l'**identité métier** de la facture, à savoir
+  le couple *(compte client, période)* : un re-scan, un recadrage ou un autre
+  nom de fichier produisent une empreinte différente pour la **même** facture,
+  que seul ce second contrôle peut voir. Les couples déjà présents sont relus
+  dans les feuilles de données, qui font foi. Message renvoyé :
+  *« Facture déjà présente dans le fichier général (compte 0012345678 sur
+  mars-2026) »*. Désactivable avec `CAMWATER_REJETER_DOUBLONS=false`.
 
 ---
 
@@ -522,6 +555,7 @@ Toutes les options sont des variables d'environnement, ou un fichier `.env`
 | `CAMWATER_TAUX_TVA` | `0.1925` | Taux de TVA |
 | `CAMWATER_TOLERANCE` | `1` | Écart toléré (FCFA) sur les totaux |
 | `CAMWATER_FEUILLE_UNIQUE` | *(vide)* | Feuille unique au lieu d'une par ministère |
+| `CAMWATER_COMPLETER_MOIS` | `true` | Fait figurer les mois sans facture au Résumé |
 | `CAMWATER_MAPPING_FILE` | *(vide)* | Règles de mapping supplémentaires |
 | `CAMWATER_INBOX_DIR` | `data/inbox` | Dossier surveillé |
 
