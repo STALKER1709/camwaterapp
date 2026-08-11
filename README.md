@@ -25,12 +25,23 @@ export ANTHROPIC_API_KEY=sk-ant-...
 python app.py
 ```
 
-### Windows — prérequis : installer Python
+### Windows — prérequis : Python
 
-Windows n'est pas livré avec Python. Si `python` répond
-*« Python est introuvable ; exécutez sans arguments à installer à partir du
-Microsoft Store »*, c'est l'**alias d'exécution** de Windows — un raccourci vide
-vers le Store, pas un interpréteur. Installez le vrai Python :
+**Commencez par vérifier si Python est déjà présent**, avant toute
+installation. `py` est le lanceur officiel Windows : il trouve l'interpréteur
+même quand la commande `python` reste captée par l'alias du Microsoft Store.
+
+```powershell
+py --version        # Python 3.10 ou supérieur convient
+```
+
+Si une version s'affiche, **passez directement à la section suivante** : rien à
+installer, et utilisez `py` plutôt que `python` dans toutes les commandes.
+
+Si `py` est introuvable, ou si `python` répond *« Python est introuvable ;
+exécutez sans arguments à installer à partir du Microsoft Store »* (c'est
+l'**alias d'exécution** de Windows : un raccourci vide vers le Store, pas un
+interpréteur), installez alors le vrai Python :
 
 ```powershell
 winget install --id Python.Python.3.12 -e
@@ -41,16 +52,22 @@ d'un nouveau terminal). Sans `winget` : installeur sur
 <https://www.python.org/downloads/windows/>, en **cochant « Add python.exe to
 PATH »** sur le premier écran.
 
-Vérification — `py` est le lanceur officiel Windows, il fonctionne même si
-`python` reste capté par l'alias du Store :
+Si `python` continue d'ouvrir le Store : **Paramètres → Applications →
+Paramètres avancés des applications → Alias d'exécution d'application**,
+désactivez `python.exe` et `python3.exe`.
+
+> **Dépannage de l'installeur** — un échec `winget` du type
+> *« Échec du programme d'installation avec le code de sortie : 2147942512 »*
+> se décode en hexadécimal : `0x80070070`, soit l'erreur Win32 112,
+> **ERROR_DISK_FULL**. Le venv et ses dépendances occupent 300 à 500 Mo ;
+> vérifiez l'espace libre avec `Get-PSDrive C | Select-Object Used, Free`.
+
+⚠️ Placez-vous **dans le dossier du dépôt** avant de créer le venv — jamais
+dans `C:\WINDOWS\system32`, où l'écriture est refusée :
 
 ```powershell
-py --version        # doit afficher Python 3.11.x ou 3.12.x
+cd $HOME\camwaterapp        # ou le chemin réel du dépôt cloné
 ```
-
-Si `python` ouvre encore le Store : **Paramètres → Applications → Paramètres
-avancés des applications → Alias d'exécution d'application**, désactivez
-`python.exe` et `python3.exe`.
 
 ### Windows — PowerShell
 
