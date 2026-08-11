@@ -151,6 +151,15 @@ class ExcelManager:
                 # Sauvegarde de secours de la version précédente.
                 shutil.copy2(self.chemin, self.chemin.with_suffix(".xlsx.bak"))
             os.replace(provisoire_path, self.chemin)
+        except PermissionError as exc:
+            # Cas le plus fréquent sous Windows : le classeur est ouvert dans
+            # Excel, qui pose un verrou exclusif empêchant le remplacement.
+            provisoire_path.unlink(missing_ok=True)
+            raise ExcelError(
+                f"« {self.chemin.name} » est verrouillé par une autre application "
+                "(le plus souvent Excel, qui l'a ouvert). Fermez-le puis relancez le "
+                "traitement : aucune ligne n'a été écrite, le fichier est intact."
+            ) from exc
         except Exception as exc:
             provisoire_path.unlink(missing_ok=True)
             raise ExcelError(f"Échec de l'enregistrement de « {self.chemin} » : {exc}") from exc

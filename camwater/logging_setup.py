@@ -25,14 +25,28 @@ def configurer_logs(niveau: str | None = None) -> logging.Logger:
     racine.setLevel(getattr(logging, niveau_effectif, logging.INFO))
     formateur = logging.Formatter(_FORMAT, datefmt=_DATE)
 
-    console = logging.StreamHandler(sys.stdout)
+    # Les messages contiennent des symboles absents de cp1252 (« ≠ », « → »,
+    # « − »), encodage par défaut d'une console Windows francophone lorsque la
+    # sortie est redirigée (service, `> journal.txt`, pipe). Sans ce forçage en
+    # UTF-8, l'écriture du log lèverait UnicodeEncodeError.
+    flux = sys.stdout
+    try:
+        flux.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):  # flux déjà remplacé (tests, pipe exotique)
+        pass
+
+    console = logging.StreamHandler(flux)
     console.setFormatter(formateur)
     racine.addHandler(console)
 
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         fichier = RotatingFileHandler(
-            LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            LOG_FILE,
+            maxBytes=5 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+            errors="replace",
         )
         fichier.setFormatter(formateur)
         racine.addHandler(fichier)

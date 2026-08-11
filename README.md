@@ -15,15 +15,114 @@ Python, ce qui rend les résultats vérifiables et reproductibles.
 
 ## 1. Démarrage en une commande
 
+### Linux / macOS (bash, zsh)
+
 ```bash
 python -m venv venv
-source venv/bin/activate            # Windows : venv\Scripts\activate
+source venv/bin/activate
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=sk-ant-... # Windows : set ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_API_KEY=sk-ant-...
+python app.py
+```
+
+### Windows — prérequis : installer Python
+
+Windows n'est pas livré avec Python. Si `python` répond
+*« Python est introuvable ; exécutez sans arguments à installer à partir du
+Microsoft Store »*, c'est l'**alias d'exécution** de Windows — un raccourci vide
+vers le Store, pas un interpréteur. Installez le vrai Python :
+
+```powershell
+winget install --id Python.Python.3.12 -e
+```
+
+Puis **fermez et rouvrez PowerShell** (le PATH n'est rechargé qu'au démarrage
+d'un nouveau terminal). Sans `winget` : installeur sur
+<https://www.python.org/downloads/windows/>, en **cochant « Add python.exe to
+PATH »** sur le premier écran.
+
+Vérification — `py` est le lanceur officiel Windows, il fonctionne même si
+`python` reste capté par l'alias du Store :
+
+```powershell
+py --version        # doit afficher Python 3.11.x ou 3.12.x
+```
+
+Si `python` ouvre encore le Store : **Paramètres → Applications → Paramètres
+avancés des applications → Alias d'exécution d'application**, désactivez
+`python.exe` et `python3.exe`.
+
+### Windows — PowerShell
+
+⚠️ **Ne recopiez pas les commandes bash ci-dessus dans PowerShell** : `&&`,
+`source` et `export` n'y existent pas (« Le jeton `&&` n'est pas un séparateur
+d'instruction valide »). Utilisez ces quatre lignes, une par une :
+
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+python app.py
+```
+
+Si PowerShell refuse d'exécuter `Activate.ps1` (« l'exécution de scripts est
+désactivée sur ce système »), deux solutions :
+
+```powershell
+# soit autoriser les scripts pour cette session uniquement
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\venv\Scripts\Activate.ps1
+
+# soit se passer complètement de l'activation (méthode la plus robuste)
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+.\venv\Scripts\python.exe app.py
+```
+
+Séquence complète recommandée sous Windows, avec `py` et le Python du venv en
+chemin direct — elle évite d'un coup l'alias du Store et la stratégie
+d'exécution :
+
+```powershell
+py -m venv venv
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+.\venv\Scripts\python.exe app.py
+```
+
+Contrôle de l'installation **sans clé API** (les 92 tests simulent la lecture
+visuelle) :
+
+```powershell
+.\venv\Scripts\python.exe -m pytest tests\ -q
+```
+
+Pour rendre la clé permanente (au lieu de la retaper à chaque session) :
+
+```powershell
+setx ANTHROPIC_API_KEY "sk-ant-..."     # effectif dans les NOUVEAUX terminaux
+```
+
+### Windows — invite de commandes (cmd.exe)
+
+```bat
+python -m venv venv
+venv\Scripts\activate.bat
+pip install -r requirements.txt
+set ANTHROPIC_API_KEY=sk-ant-...
 python app.py
 ```
 
 Puis ouvrez **<http://localhost:8000/>** et déposez vos factures.
+
+> **Deux points d'attention sous Windows**
+> * Le classeur ne peut pas être remplacé s'il est **ouvert dans Excel** : le
+>   traitement s'arrête proprement avec un message explicite et le fichier reste
+>   intact — fermez Excel puis relancez.
+> * Les journaux sont forcés en UTF-8 : les symboles `≠`, `→`, `−` des messages
+>   d'anomalie s'affichent correctement même quand la sortie est redirigée vers
+>   un fichier ou un service Windows.
 
 > **Dépendance système recommandée** — `poppler-utils` fournit `pdftoppm`, utilisé
 > pour convertir les PDF en PNG à 200 DPI.
@@ -364,7 +463,12 @@ en bout (succès, doublon refusé, échec de lecture, écart de totaux).
 
 | Symptôme | Cause et remède |
 |---|---|
+| `Python est introuvable ; exécutez sans arguments à installer à partir du Microsoft Store` | Python n'est pas installé : c'est l'alias d'exécution Windows. Voir « Windows — prérequis » au §1 |
+| `Le jeton « && » n'est pas un séparateur d'instruction valide` | Commandes bash recopiées dans PowerShell — utilisez la section PowerShell du §1 |
+| `.\venv\Scripts\Activate.ps1 n'est pas reconnu` | Le venv n'a pas été créé (Python absent), ou vous n'êtes pas dans le dossier du projet |
+| `l'exécution de scripts est désactivée sur ce système` | Stratégie d'exécution PowerShell — utilisez `.\venv\Scripts\python.exe app.py` sans activer le venv |
 | `Could not resolve authentication method` | `ANTHROPIC_API_KEY` absent — exportez la clé ou utilisez `ant auth login` |
+| `… est verrouillé par une autre application` | Le classeur est ouvert dans Excel : fermez-le et relancez (aucune ligne n'a été écrite) |
 | `poppler-utils absent` dans les journaux | Installez poppler pour la conversion 200 DPI ; sinon le PDF est lu nativement (dégradé mais fonctionnel) |
 | `Impossible d'ouvrir … xlsx` | Le classeur est ouvert dans Excel : fermez-le. Une sauvegarde `.xlsx.bak` est disponible |
 | `Facture déjà intégrée sous le nom …` | Contenu identique déjà traité (protection anti-doublon) ; `CAMWATER_REJETER_DOUBLONS=false` pour l'ignorer |
