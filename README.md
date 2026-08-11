@@ -461,7 +461,51 @@ de continuation, et les lignes de toutes les pages sont concaténées.
 
 ---
 
-## 7. Configuration
+## 7. Obtenir la clé API Anthropic
+
+La lecture visuelle des factures passe par l'API Anthropic ; il faut donc une
+clé. Elle se crée sur la console : <https://platform.claude.com>
+(l'ancienne adresse `console.anthropic.com` y redirige).
+
+1. Connectez-vous ou créez un compte ;
+2. **Settings → API keys** (<https://platform.claude.com/settings/keys>) ;
+3. **Create key**, avec un nom parlant (ex. `camwater-poste-serveur`) ;
+4. **Copiez la clé tout de suite** : elle commence par `sk-ant-` et n'est
+   affichée qu'une seule fois. Perdue, il faut en régénérer une.
+
+Trois points à connaître avant de commencer :
+
+* **Un abonnement Claude.ai ne donne pas accès à l'API.** Claude Pro ou Max
+  couvre le site et les applications, pas l'API : c'est une facturation
+  distincte. Créditez le compte dans **Settings → Billing**, sinon la clé
+  existe mais chaque appel est rejeté.
+* **Une seule clé suffit pour tous les postes.** Elle est installée sur la
+  machine qui héberge l'application ; les autres postes passent par
+  l'interface web et ne manipulent aucun secret.
+* **Coût indicatif** — Claude Opus 5 est facturé 5 $ par million de jetons en
+  entrée et 25 $ en sortie. Une page de facture scannée représente quelques
+  milliers de jetons en entrée, plus la transcription JSON en sortie : comptez
+  de quelques centimes à une dizaine de centimes par page, à confirmer sur vos
+  propres factures (le volume de sortie suit le nombre de lignes d'abonnement).
+  `CAMWATER_MODEL` et `CAMWATER_EFFORT` permettent d'ajuster, mais vérifiez la
+  qualité de lecture avant de descendre en gamme : c'est la difficulté des
+  scans tramés qui a justifié ce choix de modèle.
+
+Où placer la clé, par ordre de commodité :
+
+| Méthode | Portée |
+|---|---|
+| `demarrer.bat` la demande au premier lancement | Écrite dans `.env`, permanente, ignorée par git |
+| `.env` à la racine : `ANTHROPIC_API_KEY=sk-ant-...` | Permanente |
+| `$env:ANTHROPIC_API_KEY = "sk-ant-..."` (PowerShell) | Session courante uniquement |
+| `setx ANTHROPIC_API_KEY "sk-ant-..."` (PowerShell) | Permanente, effective dans les **nouveaux** terminaux |
+
+⚠️ Ne committez jamais la clé. `.env` figure dans `.gitignore` ; si une clé a
+été exposée, révoquez-la depuis la console et créez-en une autre.
+
+---
+
+## 8. Configuration
 
 Toutes les options sont des variables d'environnement, ou un fichier `.env`
 (voir `.env.example`). Les plus utiles :
@@ -483,7 +527,7 @@ Toutes les options sont des variables d'environnement, ou un fichier `.env`
 
 ---
 
-## 8. Tests
+## 9. Tests
 
 La suite complète tourne **sans clé API** (la lecture visuelle est simulée) :
 
@@ -499,7 +543,7 @@ en bout (succès, doublon refusé, échec de lecture, écart de totaux).
 
 ---
 
-## 9. Dépannage
+## 10. Dépannage
 
 | Symptôme | Cause et remède |
 |---|---|
