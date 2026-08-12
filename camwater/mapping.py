@@ -1,16 +1,25 @@
 """Affectation du ministère (`Ministère_2026`) à partir des libellés facture.
 
-Trois familles de règles, appliquées dans cet ordre :
+**La source prime sur la règle.** `Nom abonné` désigne l'entité réellement
+desservie ; `Nom du client` n'est que le titulaire du compte, souvent le
+ministère payeur — et parfois, sur un scan mal lu, le nom de l'émetteur de la
+facture. L'abonné est donc examiné en entier d'abord ; le client ne sert que
+s'il n'a pas permis de conclure.
+
+Pour chaque source, dans l'ordre :
 
 1. **Exclusions** — entités publiques *non gouvernementales* (sociétés d'État,
    établissements autonomes, médias…). Elles ne relèvent d'aucun ministère et
    sont marquées `HORS_PERIMETRE`.
 2. **Patterns priorisés** — le premier pattern qui matche gagne. La priorité
    basse est la plus forte (1 = institutions, 10 = ministères techniques).
+
+Puis, si aucune source n'a conclu :
+
 3. **Repli** — ministère du dossier source s'il est fourni, sinon `À_VÉRIFIER`.
 
-Le champ testé est la concaténation `Nom abonné` + `Nom du client` normalisée
-(majuscules, accents retirés, ponctuation réduite à des espaces).
+Chaque libellé est normalisé avant test (majuscules, accents retirés,
+ponctuation réduite à des espaces).
 
 Extensibilité : déposer un fichier JSON à l'emplacement pointé par
 `CAMWATER_MAPPING_FILE` pour ajouter/écraser des règles sans toucher au code ::
@@ -95,25 +104,36 @@ def _mot(*variantes: str) -> str:
 # Entités publiques non gouvernementales : jamais rattachées à un ministère.
 # --------------------------------------------------------------------------- #
 
+# Note sur les sigles nus, même règle que pour les ministères : un sigle court
+# qui peut apparaître à l'intérieur du libellé d'une entité gouvernementale
+# n'est gardé que sous sa forme développée. Une exclusion à tort est bien plus
+# coûteuse qu'une exclusion manquée : elle range une facture publique parmi les
+# entités hors périmètre, alors qu'un sigle non reconnu tombe simplement en
+# `À_VÉRIFIER`, sous les yeux d'un contrôleur.
+#
+# Six sigles ont été retirés pour cette raison, chacun sur collision constatée :
+#   CDE → « ECOLE PUBLIQUE DE CDE »        SIC → « CITE SIC DE MESSA »
+#   PAD → « SOUS PREFECTURE DE PAD »       PAK → « LYCEE DE PAK »
+#   ART → « CENTRE D ART DE DOUALA »       CDC → « CENTRE DE SANTE DE CDC »
 EXCLUSIONS: tuple[str, ...] = (
     _mot("CRTV", "CAMEROON RADIO TELEVISION"),
     _mot("BEAC", "BANQUE DES ETATS DE L AFRIQUE CENTRALE"),
     _mot("CAMRAIL"),
     _mot("CAMTEL", "CAMEROON TELECOMMUNICATIONS"),
     _mot("CAMAIR CO", "CAMAIRCO", "CAMEROON AIRLINES"),
-    _mot("CAMWATER", "CDE", "CAMEROONAISE DES EAUX"),
+    _mot("CAMWATER", "CAMEROONAISE DES EAUX"),
     _mot("ENEO", "AES SONEL", "SONEL"),
     _mot("SONARA"),
     _mot("SNH", "SOCIETE NATIONALE DES HYDROCARBURES"),
     _mot("SODECOTON"),
     _mot("ALUCAM"),
     _mot("MAGZI"),
-    _mot("SIC", "SOCIETE IMMOBILIERE DU CAMEROUN"),
+    _mot("SOCIETE IMMOBILIERE DU CAMEROUN"),
     _mot("CNPS", "CAISSE NATIONALE DE PREVOYANCE SOCIALE"),
-    _mot("PAD", "PORT AUTONOME DE DOUALA", "PAK", "PORT AUTONOME DE KRIBI"),
-    _mot("ART", "AGENCE DE REGULATION DES TELECOMMUNICATIONS"),
+    _mot("PORT AUTONOME DE DOUALA", "PORT AUTONOME DE KRIBI"),
+    _mot("AGENCE DE REGULATION DES TELECOMMUNICATIONS"),
     _mot("ANOR"),
-    _mot("CDC", "CAMEROON DEVELOPMENT CORPORATION"),
+    _mot("CAMEROON DEVELOPMENT CORPORATION"),
     _mot("MTN", "ORANGE CAMEROUN", "NEXTTEL"),
     _mot("SCDP", "SOCIETE CAMEROUNAISE DES DEPOTS PETROLIERS"),
     _mot("MIPROMALO"),
@@ -128,11 +148,17 @@ EXCLUSIONS: tuple[str, ...] = (
 REGLES: tuple[Regle, ...] = (
     # --- 1. Présidence et institutions ------------------------------------ #
     # Note sur les sigles ambigus : lorsqu'un acronyme court désigne deux
-    # entités relevant de ministères différents (CES = Conseil économique et
-    # social ou Collège d'enseignement secondaire ; ENSP = École nationale
-    # supérieure de police ou Polytechnique ; PR = Présidence ou titre), seule
-    # la forme développée est retenue. Un sigle nu tombe ainsi en `À_VÉRIFIER`
-    # plutôt que d'être affecté au mauvais ministère en silence.
+    # entités relevant de ministères différents (ENSP = École nationale
+    # supérieure de police ou Polytechnique ; PR = Présidence ou titre ;
+    # AN = Assemblée nationale ou le mot « an »), seule la forme développée est
+    # retenue. Un sigle nu tombe ainsi en `À_VÉRIFIER` plutôt que d'être affecté
+    # au mauvais ministère en silence.
+    #
+    # `CES` fait exception, volontairement : le sigle nu reste rattaché à
+    # MINESEC (priorité 6), car « CES » désigne couramment un collège
+    # d'enseignement secondaire sur ces factures, alors que le Conseil
+    # économique et social — une institution unique — s'écrit en toutes lettres
+    # et est capté par sa forme développée en priorité 2, qui l'emporte.
     Regle(
         "PRC",
         1,
@@ -378,22 +404,27 @@ def resoudre_ministere(
             certain=False,
         )
 
-    for pattern in _EXCLUSIONS_ACTIVES:
-        if re.search(pattern, f"{libelle_abonne} {libelle_client}"):
-            return ResultatMapping(
-                ministere=MAPPING_HORS_PERIMETRE,
-                motif="entité exclue (non gouvernementale)",
-                pattern=pattern,
-            )
-
     # `Nom abonné` désigne l'entité réellement desservie : il est examiné en
-    # premier, sur toute la liste de priorités. `Nom du client` (le titulaire du
-    # compte, souvent le ministère payeur) ne sert que si l'abonné ne permet pas
-    # de conclure — sans quoi un lycée facturé sur un compte MINSANTE serait
-    # rattaché à la santé.
+    # premier, en entier — exclusions **et** règles — avant qu'on ne regarde le
+    # `Nom du client` (le titulaire du compte, souvent le ministère payeur).
+    #
+    # Les exclusions suivent cette même priorité de source, et non plus la
+    # concaténation des deux libellés. Sans cela, il suffisait que le nom du
+    # client porte « CAMWATER » — le nom de l'émetteur, qu'un modèle de lecture
+    # peut recopier depuis l'en-tête — pour que toute la facture d'un lycée
+    # bascule en « hors périmètre ».
     for source, libelle in (("nom abonné", libelle_abonne), ("nom du client", libelle_client)):
         if not libelle:
             continue
+
+        for pattern in _EXCLUSIONS_ACTIVES:
+            if re.search(pattern, libelle):
+                return ResultatMapping(
+                    ministere=MAPPING_HORS_PERIMETRE,
+                    motif=f"entité exclue (non gouvernementale) d'après le {source}",
+                    pattern=pattern,
+                )
+
         for regle in _REGLES_ACTIVES:
             pattern = regle.correspond(libelle)
             if pattern:

@@ -62,6 +62,20 @@ def test_le_nom_du_client_sert_de_secours():
     assert resultat.ministere == "MINSANTE"
 
 
+def _alternatives(pattern: str) -> list[str]:
+    """Les libellés littéraux d'un motif « mot entier » construit par `_mot()`."""
+    import re
+
+    motif = re.match(r"^\(\?<!\[A-Z0-9\]\)\(\?:(.*)\)\(\?!\[A-Z0-9\]\)$", pattern)
+    if not motif:
+        return []
+    return [
+        alternative.replace(r"\s+", " ")
+        for alternative in motif.group(1).split("|")
+        if not re.search(r"[\[\]{}()*+?^$]", alternative)  # motif non littéral
+    ]
+
+
 def test_aucun_pattern_masque_par_une_priorite_superieure():
     """Chaque motif doit résoudre vers son propre ministère.
 
@@ -70,27 +84,103 @@ def test_aucun_pattern_masque_par_une_priorite_superieure():
     « DISTRICT » sous MINAT captait « HOPITAL DE DISTRICT », qui relève de
     MINSANTE). Toute nouvelle règle est vérifiée automatiquement ici.
     """
-    import re
-
     from camwater.mapping import REGLES
-
-    def alternatives(pattern: str) -> list[str]:
-        motif = re.match(r"^\(\?<!\[A-Z0-9\]\)\(\?:(.*)\)\(\?!\[A-Z0-9\]\)$", pattern)
-        return [a.replace(r"\s+", " ") for a in motif.group(1).split("|")] if motif else []
 
     collisions = []
     for regle in REGLES:
         if regle.code == "MINISTERE":  # règle générique de dernier recours
             continue
         for pattern in regle.patterns:
-            for libelle in alternatives(pattern):
-                if re.search(r"[\[\]{}()*+?^$]", libelle):  # motif non littéral
-                    continue
+            for libelle in _alternatives(pattern):
                 obtenu = resoudre_ministere(libelle).ministere
                 if obtenu != regle.code:
                     collisions.append(f"« {libelle} » : attendu {regle.code}, obtenu {obtenu}")
 
     assert not collisions, "Motifs masqués :\n  " + "\n  ".join(collisions)
+
+
+def test_chaque_exclusion_resout_bien_en_hors_perimetre():
+    """Symétrique du test précédent, côté exclusions.
+
+    Le détecteur de masquage ne couvrait que `REGLES` : c'est exactement le
+    trou par lequel le défaut A-1 est passé. Une exclusion masquée par une
+    règle ministérielle rattacherait une société d'État à un ministère.
+    """
+    from camwater.mapping import EXCLUSIONS
+
+    collisions = []
+    for pattern in EXCLUSIONS:
+        for libelle in _alternatives(pattern):
+            obtenu = resoudre_ministere(libelle).ministere
+            if obtenu != MAPPING_HORS_PERIMETRE:
+                collisions.append(f"« {libelle} » : attendu HORS_PERIMETRE, obtenu {obtenu}")
+
+    assert not collisions, "Exclusions masquées :\n  " + "\n  ".join(collisions)
+
+
+#: Libellés d'entités publiques réellement gouvernementales. Aucun ne doit être
+#: happé par une exclusion : un sigle nu ambigu dans la liste d'exclusions
+#: rangerait une facture publique parmi les entités hors périmètre — bien plus
+#: coûteux qu'une exclusion manquée, qui reste visible en `À_VÉRIFIER`.
+_LIBELLES_GOUVERNEMENTAUX = (
+    "ECOLE PUBLIQUE DE CDE",
+    "CENTRE DE SANTE INTEGRE DE CDC",
+    "CITE SIC DE MESSA",
+    "CAMP SIC DE NYLON",
+    "CENTRE D ART DE DOUALA",
+    "COLLEGE ART ET METIERS",
+    "SOUS PREFECTURE DE PAD",
+    "LYCEE DE PAK",
+    "HOPITAL DE DISTRICT DE CDC",
+    "DELEGATION DEPARTEMENTALE DES ARTS",
+    "LYCEE TECHNIQUE DE NKOLBISSON",
+    "BRIGADE DE GENDARMERIE DE MBALMAYO",
+)
+
+
+@pytest.mark.parametrize("libelle", _LIBELLES_GOUVERNEMENTAUX)
+def test_aucune_exclusion_ne_happe_une_entite_gouvernementale(libelle):
+    """Régression : six sigles nus (CDE, SIC, PAD, PAK, ART, CDC) collisionnaient."""
+    resultat = resoudre_ministere(libelle)
+    assert resultat.ministere != MAPPING_HORS_PERIMETRE, (
+        f"« {libelle} » exclu à tort par {resultat.pattern}"
+    )
+
+
+@pytest.mark.parametrize(
+    "abonne, attendu",
+    [
+        ("LYCEE BILINGUE DE MENDONG", "MINESEC"),
+        ("HOPITAL CENTRAL DE YAOUNDE", "MINSANTE"),
+        ("PREFECTURE DU WOURI", "MINAT"),
+    ],
+)
+@pytest.mark.parametrize("client", ["CAMWATER", "CDE YAOUNDE", "CAMEROONAISE DES EAUX"])
+def test_l_emetteur_dans_le_nom_du_client_n_exclut_pas_la_facture(abonne, client, attendu):
+    """Régression A-1 : le cœur du défaut.
+
+    Les exclusions travaillaient sur la concaténation abonné + client. Il
+    suffisait que le nom du client porte le nom de l'émetteur de la facture —
+    ce qu'un modèle de lecture peut recopier depuis l'en-tête — pour que toute
+    la facture bascule en « hors périmètre ».
+    """
+    assert resoudre_ministere(abonne, client).ministere == attendu
+
+
+def test_une_exclusion_sur_le_client_reste_appliquee():
+    """L'abonné ne conclut pas : c'est alors au client de trancher."""
+    resultat = resoudre_ministere("BLOC A", "CRTV YAOUNDE")
+
+    assert resultat.ministere == MAPPING_HORS_PERIMETRE
+    assert "nom du client" in resultat.motif
+
+
+def test_l_exclusion_prime_sur_la_regle_dans_la_meme_source():
+    """Une société d'État reste exclue même si son libellé matche une règle."""
+    resultat = resoudre_ministere("CAMTEL DIRECTION DES TRAVAUX PUBLICS")
+
+    assert resultat.ministere == MAPPING_HORS_PERIMETRE
+    assert "nom abonné" in resultat.motif
 
 
 def test_hopital_de_district_reste_sante():

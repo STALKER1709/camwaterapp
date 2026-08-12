@@ -36,7 +36,7 @@ Depuis PowerShell, si vous préférez :
 
 ```powershell
 .\demarrer.bat            # démarrage normal
-.\demarrer.bat -Tests     # vérifie l'installation via les 174 tests, sans clé API
+.\demarrer.bat -Tests     # vérifie l'installation via les 198 tests, sans clé API
 ```
 
 Le `.bat` appelle `demarrer.ps1` avec `-ExecutionPolicy Bypass`, ce qui évite le
@@ -129,7 +129,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 .\venv\Scripts\python.exe app.py
 ```
 
-Contrôle de l'installation **sans clé API** (les 174 tests simulent la lecture
+Contrôle de l'installation **sans clé API** (les 198 tests simulent la lecture
 visuelle) :
 
 ```powershell
@@ -211,7 +211,7 @@ camwaterapp/
 ├── docs/
 │   └── exemple_CAMWATER_Pointage_General.xlsx   # exemple de livrable
 │
-├── tests/                      # 174 tests, exécutables sans clé API
+├── tests/                      # 198 tests, exécutables sans clé API
 │
 ├── data/
 │   ├── uploads/                # factures reçues (zone de travail)
@@ -438,19 +438,34 @@ Une valeur non reconstructible n'est **jamais devinée** : la cellule porte
 
 ### 5.4 Mapping ministère (`camwater/mapping.py`)
 
+**La source prime sur la règle.** Le `Nom abonné` désigne l'entité réellement
+desservie ; le `Nom du client` n'est que le titulaire du compte — souvent le
+ministère payeur, et parfois, sur un scan mal lu, le nom de l'émetteur de la
+facture. L'abonné est donc examiné **en entier d'abord**, exclusions comprises ;
+le client ne sert qu'en second recours.
+
+Pour chaque source, dans l'ordre :
+
 1. **Exclusions** — entités publiques non gouvernementales (CRTV, BEAC,
-   CAMRAIL, CAMTEL, ENEO, SONARA, CNPS, ART, CDC…) → `HORS_PERIMETRE`.
-2. **Patterns priorisés** — le `Nom abonné` est examiné en premier sur toute la
-   liste de priorités, car il désigne l'entité réellement desservie ; le
-   `Nom du client` (titulaire du compte, souvent le ministère payeur) ne sert
-   qu'en second recours. Sans cela, un lycée facturé sur un compte MINSANTE
-   serait rattaché à la santé.
-   Priorité 1 (institutions : PRC, GP, SPM, AN, SENAT) → 3 (DGSN, MINDEF,
-   MINJUSTICE) → 4 (MINAT) → 5 (MINSANTE) → 6 (éducation) → 7 (MINFI) → …
-   Les libellés fonctionnels sont reconnus, pas seulement les sigles :
-   *hôpital*, *lycée*, *commissariat*, *préfecture*, *tribunal*, *centre des
-   impôts*…
+   CAMRAIL, CAMTEL, ENEO, SONARA, CNPS…) → `HORS_PERIMETRE`.
+2. **Patterns priorisés** — priorité 1 (institutions : PRC, GP, SPM, AN, SENAT)
+   → 3 (DGSN, MINDEF, MINJUSTICE) → 4 (MINAT) → 5 (MINSANTE) → 6 (éducation)
+   → 7 (MINFI) → … Les libellés fonctionnels sont reconnus, pas seulement les
+   sigles : *hôpital*, *lycée*, *commissariat*, *préfecture*, *tribunal*,
+   *centre des impôts*…
+
+Puis, si aucune source n'a conclu :
+
 3. **Repli** — administration saisie à l'upload si fournie, sinon `À_VÉRIFIER`.
+
+> **Sigles nus.** Un acronyme court qui peut désigner deux entités n'est retenu
+> que sous sa forme développée, des deux côtés — règles et exclusions. Une
+> exclusion à tort est bien plus coûteuse qu'une exclusion manquée : elle range
+> une facture publique parmi les entités hors périmètre, alors qu'un sigle non
+> reconnu tombe simplement en `À_VÉRIFIER`, sous les yeux d'un contrôleur.
+> C'est pourquoi `ART`, `SIC`, `PAD`, `PAK`, `CDC` et `CDE` ne figurent plus
+> qu'en toutes lettres : ils collisionnaient avec « CENTRE D ART DE DOUALA »,
+> « CITÉ SIC DE MESSA », « ÉCOLE PUBLIQUE DE CDE »…
 
 **Extension sans toucher au code** — un fichier JSON pointé par
 `CAMWATER_MAPPING_FILE` :
@@ -668,7 +683,7 @@ Toutes les options sont des variables d'environnement, ou un fichier `.env`
 La suite complète tourne **sans clé API** (la lecture visuelle est simulée) :
 
 ```bash
-python -m pytest tests/ -q      # 174 tests
+python -m pytest tests/ -q      # 198 tests
 ```
 
 Couverture : parsing des nombres et formules, dérivations, mapping ministère et
