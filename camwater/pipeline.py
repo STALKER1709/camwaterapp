@@ -4,7 +4,7 @@ Enchaînement :
 
     fichier reçu
       → empreinte SHA-256 (contrôle de doublon)
-      → conversion PDF → PNG 200 DPI (ou image telle quelle)
+      → conversion PDF → PNG puis mise à la résolution utile (ou image telle quelle)
       → lecture visuelle par le modèle (extraction.py)
       → normalisation + formules (calculs.py) + mapping ministère (mapping.py)
       → validation et statuts (validation.py)
@@ -31,6 +31,7 @@ from typing import Optional
 from .calculs import calculer_ligne, format_nombre
 from .config import (
     ERROR_DIR,
+    MARQUEUR_A_VERIFIER,
     MARQUEUR_ILLISIBLE,
     MOIS_FR,
     PROCESSED_DIR,
@@ -38,7 +39,12 @@ from .config import (
     UPLOAD_DIR,
 )
 from .excel_manager import ExcelError, ExcelManager
-from .extraction import ExtractionError, FactureExtraite, extraire_facture
+from .extraction import (
+    CLE_DIVERGENCES,
+    ExtractionError,
+    FactureExtraite,
+    extraire_facture,
+)
 from .mapping import resoudre_ministere
 from .models import LigneFacture, RapportTraitement
 from .pdf_utils import ConversionError, preparer_pages
@@ -231,6 +237,14 @@ def construire_lignes(
                 "Montant TTC": format_nombre(calcul.montant_ttc),
             },
         )
+        # Divergence entre deux lectures indépendantes : la valeur retenue est
+        # celle de la lecture la plus confiante, mais un humain doit trancher.
+        for divergence in brut.get(CLE_DIVERGENCES) or []:
+            ligne.marquer(
+                MARQUEUR_A_VERIFIER,
+                f"Double lecture divergente sur {divergence}",
+            )
+
         if not affectation.certain:
             ligne.anomalies.append(f"Ministère incertain : {affectation.motif}")
         if periode is None:

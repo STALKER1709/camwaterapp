@@ -93,8 +93,27 @@ MEDIA_TYPES = {
 }
 
 MAX_UPLOAD_BYTES = _env_int("CAMWATER_MAX_UPLOAD_MB", 50) * 1024 * 1024
-PDF_DPI = _env_int("CAMWATER_PDF_DPI", 200)
+
+#: Rendu des PDF. 300 DPI dépasse volontairement la taille lue par le modèle :
+#: on réduit ensuite nous-mêmes en Lanczos (sur-échantillonnage), ce qui rend
+#: les traits fins plus nets qu'un rendu direct à la taille cible.
+PDF_DPI = _env_int("CAMWATER_PDF_DPI", 300)
 MAX_PAGES = _env_int("CAMWATER_MAX_PAGES", 40)
+
+#: Grand côté lu par les modèles haute résolution (Claude Opus 5, Opus 4.7/4.8,
+#: Sonnet 5). À 200 DPI, une page A4 ne faisait que 2338 px : 9 % de finesse
+#: perdue sur des chiffres déjà masqués par le tampon.
+MAX_COTE_LONG = _env_int("CAMWATER_COTE_LONG", 2576)
+
+#: Atténuation du tampon bleu par extraction du canal rouge. Dépend de la teinte
+#: réelle du tampon : à valider à l'œil (tools/apercu_pretraitement.py) avant
+#: activation.
+ATTENUER_TAMPON = _env_bool("CAMWATER_ATTENUER_TAMPON", False)
+
+#: Double lecture indépendante de chaque page, puis comparaison chiffre à
+#: chiffre. Double le coût, mais détecte les erreurs de lecture qu'une passe
+#: unique rapporte avec assurance.
+DOUBLE_LECTURE = _env_bool("CAMWATER_DOUBLE_LECTURE", False)
 
 # --------------------------------------------------------------------------- #
 # Modèle LLM (lecture visuelle)

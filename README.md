@@ -36,7 +36,7 @@ Depuis PowerShell, si vous préférez :
 
 ```powershell
 .\demarrer.bat            # démarrage normal
-.\demarrer.bat -Tests     # vérifie l'installation via les 92 tests, sans clé API
+.\demarrer.bat -Tests     # vérifie l'installation via les 161 tests, sans clé API
 ```
 
 Le `.bat` appelle `demarrer.ps1` avec `-ExecutionPolicy Bypass`, ce qui évite le
@@ -129,7 +129,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 .\venv\Scripts\python.exe app.py
 ```
 
-Contrôle de l'installation **sans clé API** (les 92 tests simulent la lecture
+Contrôle de l'installation **sans clé API** (les 161 tests simulent la lecture
 visuelle) :
 
 ```powershell
@@ -163,7 +163,7 @@ Puis ouvrez **<http://localhost:8000/>** et déposez vos factures.
 >   un fichier ou un service Windows.
 
 > **Dépendance système recommandée** — `poppler-utils` fournit `pdftoppm`, utilisé
-> pour convertir les PDF en PNG à 200 DPI.
+> pour convertir les PDF en PNG haute définition (300 DPI par défaut).
 > Ubuntu/Debian : `sudo apt install poppler-utils` · macOS : `brew install poppler`
 > · Windows : télécharger poppler et ajouter son dossier `bin` au `PATH`.
 > **S'il est absent, l'application ne s'arrête pas** : elle transmet le PDF
@@ -192,8 +192,10 @@ camwaterapp/
 │   ├── api.py                  # endpoints FastAPI + page d'upload
 │   ├── pipeline.py             # orchestration du traitement d'une facture
 │   ├── extraction.py           # prompt interne + appel vision au modèle
-│   ├── pdf_utils.py            # conversion PDF → PNG 200 DPI
+│   ├── pdf_utils.py            # conversion PDF → PNG (300 DPI)
+│   ├── image_utils.py          # résolution utile + atténuation du tampon
 │   ├── calculs.py              # parsing des nombres + formules de facturation
+│   ├── periodes.py             # périodes « mars-2026 » et mois manquants
 │   ├── mapping.py              # règles d'affectation du ministère
 │   ├── validation.py           # contrôles de cohérence + rapports d'erreur
 │   ├── excel_manager.py        # écriture transactionnelle du classeur
@@ -203,12 +205,13 @@ camwaterapp/
 │   └── index.html              # interface web (aucun build, aucune dépendance)
 │
 ├── tools/
-│   └── generer_exemple_excel.py  # produit un classeur d'exemple sans appel API
+│   ├── generer_exemple_excel.py  # produit un classeur d'exemple sans appel API
+│   └── apercu_pretraitement.py   # compare une facture avant/après préparation
 │
 ├── docs/
 │   └── exemple_CAMWATER_Pointage_General.xlsx   # exemple de livrable
 │
-├── tests/                      # 90 tests, exécutables sans clé API
+├── tests/                      # 161 tests, exécutables sans clé API
 │
 ├── data/
 │   ├── uploads/                # factures reçues (zone de travail)
@@ -470,7 +473,9 @@ totaux lus vs recalculés, anomalies, détail ligne à ligne).
 
 ---
 
-## 6. Le prompt envoyé au modèle
+## 6. Lecture visuelle : prompt et qualité
+
+### 6.1 Le prompt envoyé au modèle
 
 Il est intégralement lisible dans **`camwater/extraction.py`**, constante
 `PROMPT_EXTRACTION`. Points clés :
@@ -491,6 +496,62 @@ La réponse est contrainte par `output_config.format` (JSON Schema) : elle est
 structurellement garantie, il n'y a jamais de JSON à « rattraper ». Sur un
 document multi-pages, l'en-tête déjà lu est réinjecté en contexte pour les pages
 de continuation, et les lignes de toutes les pages sont concaténées.
+
+Les consignes, identiques d'une page à l'autre, sont placées dans le bloc
+`system` avec `cache_control` : elles ne sont facturées plein tarif qu'à la
+première page d'un lot, puis relues depuis le cache. L'image est placée **avant**
+la question dans le tour utilisateur, ce qui donne au modèle la page entière
+avant de savoir ce qu'on lui en demande.
+
+### 6.2 Résolution utile de l'image
+
+Le modèle exploite jusqu'à **2576 px** sur le grand côté ; au-delà, c'est le
+service qui réduit l'image, avec un filtre que l'on ne maîtrise pas. Une A4
+rendue à 200 DPI ne fait que 2338 px : environ 240 px de finesse étaient
+inutilisés sur des chiffres déjà difficiles.
+
+Le rendu se fait donc à **300 DPI** (3508 px), puis `camwater/image_utils.py`
+réduit lui-même à 2576 px par filtre de Lanczos. Ce sur-échantillonnage moyenne
+le bruit du scan et conserve mieux les traits fins qu'un rendu direct à la
+taille cible. Le coût en jetons est identique : il ne dépend que de la taille
+finale envoyée.
+
+### 6.3 Atténuation du tampon bleu (optionnel)
+
+`CAMWATER_ATTENUER_TAMPON=true` ne conserve que le **canal bleu** de l'image :
+l'encre bleue réfléchit le bleu, elle y est presque aussi claire que le papier
+et s'efface, tandis que le texte noir — sombre sur les trois canaux — reste
+lisible. Sur une image de contrôle, le trait du tampon passe d'une clarté de 110
+à 197 (le papier étant à 255) pendant que les chiffres tombent à 0 : l'écart
+tampon/chiffres passe de 85 à 197.
+
+L'effet dépend de la teinte réelle de **vos** tampons, d'où le réglage désactivé
+par défaut. Jugez sur pièce avant d'activer :
+
+```bash
+python tools/apercu_pretraitement.py data/errors/MaFacture.pdf
+```
+
+L'outil écrit trois images dans `data/apercus/` (original, redimensionnée,
+tampon atténué) à comparer côte à côte. Si l'atténuation dégrade quoi que ce
+soit, laissez l'option à `false` — la réduction contrôlée de la 6.2 est déjà un
+gain net.
+
+### 6.4 Double lecture (optionnel)
+
+Un modèle rapporte une valeur mal lue avec la même assurance qu'une valeur
+juste : rien dans sa réponse ne distingue un `1284` erroné d'un `1234` correct.
+`CAMWATER_DOUBLE_LECTURE=true` fait lire chaque page **deux fois de façon
+indépendante** et confronte les deux transcriptions chiffre par chiffre.
+
+La comparaison porte sur la **valeur**, pas sur l'écriture : « 15 280 » et
+« 15.280 » concordent, « 15 280 » et « 15 285 » divergent. Toute divergence
+marque la ligne `À_VÉRIFIER` avec les deux lectures citées dans l'anomalie ; un
+découpage du tableau en nombres de lignes différents est signalé comme tel. Les
+valeurs retenues sont celles de la lecture la plus confiante.
+
+Le coût et la durée doublent : à réserver aux lots sensibles ou à une campagne
+de contrôle, plutôt qu'au traitement courant.
 
 ---
 
@@ -549,7 +610,10 @@ Toutes les options sont des variables d'environnement, ou un fichier `.env`
 | `CAMWATER_MODEL` | `claude-opus-5` | Modèle de lecture visuelle |
 | `CAMWATER_EFFORT` | `high` | Profondeur d'analyse (`low` → `max`) |
 | `CAMWATER_PORT` | `8000` | Port d'écoute |
-| `CAMWATER_PDF_DPI` | `200` | Résolution de conversion PDF → PNG |
+| `CAMWATER_PDF_DPI` | `300` | Résolution de conversion PDF → PNG |
+| `CAMWATER_COTE_LONG` | `2576` | Grand côté de l'image envoyée au modèle |
+| `CAMWATER_DOUBLE_LECTURE` | `false` | Deux lectures confrontées (coût ×2) |
+| `CAMWATER_ATTENUER_TAMPON` | `false` | Fait pâlir le tampon bleu avant lecture |
 | `CAMWATER_MAX_UPLOAD_MB` | `50` | Taille maximale d'un fichier |
 | `CAMWATER_PRIX_UNITAIRE` | `382` | Prix unitaire du m³ |
 | `CAMWATER_TAUX_TVA` | `0.1925` | Taux de TVA |
@@ -566,7 +630,7 @@ Toutes les options sont des variables d'environnement, ou un fichier `.env`
 La suite complète tourne **sans clé API** (la lecture visuelle est simulée) :
 
 ```bash
-python -m pytest tests/ -q      # 90 tests
+python -m pytest tests/ -q      # 161 tests
 ```
 
 Couverture : parsing des nombres et formules, dérivations, mapping ministère et
@@ -574,6 +638,17 @@ exclusions, normalisation des périodes, statuts de validation, contrôle des
 totaux, écriture Excel (feuilles, résumé, anomalies, journal, doublons,
 **atomicité en cas d'échec d'écriture**), endpoints HTTP, et le pipeline de bout
 en bout (succès, doublon refusé, échec de lecture, écart de totaux).
+
+Deux séries méritent un mot, parce qu'elles **mesurent** au lieu de faire
+confiance au raisonnement :
+
+* `test_image_utils.py` calcule la clarté moyenne de zones connues (tampon,
+  chiffres, papier) avant et après traitement. C'est ce qui a révélé qu'une
+  première version travaillait sur le canal rouge et **assombrissait** le tampon
+  au lieu de l'effacer ; le test de régression le verrouille ;
+* `test_double_lecture.py` vérifie que la confrontation compare des nombres et
+  non leur écriture, qu'aucune ligne divergente n'échappe au marquage, et que la
+  divergence ressort bien jusque dans la ligne du pointage.
 
 ---
 
@@ -589,7 +664,7 @@ en bout (succès, doublon refusé, échec de lecture, écart de totaux).
 | `Aucune clé API n'est configurée` | Renseignez `ANTHROPIC_API_KEY` dans `.env` (voir §7), ou relancez `demarrer.bat` qui la demande |
 | `La clé API est invalide ou a été révoquée` | Créez une nouvelle clé sur <https://platform.claude.com> → Settings → API keys |
 | `… est verrouillé par une autre application` | Le classeur est ouvert dans Excel : fermez-le et relancez (aucune ligne n'a été écrite) |
-| `poppler-utils absent` dans les journaux | Installez poppler pour la conversion 200 DPI ; sinon le PDF est lu nativement (dégradé mais fonctionnel) |
+| `poppler-utils absent` dans les journaux | Installez poppler pour la conversion en images ; sinon le PDF est lu nativement (dégradé mais fonctionnel) |
 | `Impossible d'ouvrir … xlsx` | Le classeur est ouvert dans Excel : fermez-le. Une sauvegarde `.xlsx.bak` est disponible |
 | `Facture déjà intégrée sous le nom …` | Contenu identique déjà traité (protection anti-doublon) ; `CAMWATER_REJETER_DOUBLONS=false` pour l'ignorer |
 | `Réponse tronquée … augmentez CAMWATER_MAX_TOKENS` | Facture très longue : passez `CAMWATER_MAX_TOKENS` à 64000 |

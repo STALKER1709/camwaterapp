@@ -21,8 +21,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from .calculs import parse_nombre
 from .config import (
     ANTHROPIC_API_KEY,
+    DOUBLE_LECTURE,
     LLM_EFFORT,
     LLM_MAX_RETRIES,
     LLM_MAX_TOKENS,
@@ -33,12 +35,15 @@ from .pdf_utils import Page
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CLE_DIVERGENCES",
     "ExtractionError",
     "FactureExtraite",
     "PROMPT_EXTRACTION",
     "SCHEMA_FACTURE",
+    "confronter",
     "extraire_facture",
     "extraire_page",
+    "lire_page",
 ]
 
 
@@ -329,18 +334,30 @@ def extraire_page(page: Page, contexte: str = "") -> PageExtraite:
     """
     client = _obtenir_client()
 
+    # Les consignes restent rigoureusement identiques d'une page à l'autre :
+    # c'est ce qui rend le préfixe cachable. Le contexte, lui, varie — il part
+    # donc dans le tour utilisateur, après l'image.
     consignes = PROMPT_EXTRACTION
+    rappel_contexte = ""
     if contexte:
-        consignes += (
-            "\n═══════════ CONTEXTE DES PAGES PRÉCÉDENTES ═══════════\n"
+        rappel_contexte = (
+            "\n\nEn-tête déjà lu sur les pages précédentes :\n"
             f"{contexte}\n"
             "Utilise-le uniquement pour lever une ambiguïté d'en-tête ; "
-            "ne recopie jamais une ligne de facturation venant du contexte."
+            "ne recopie jamais une ligne de facturation venant de ce contexte."
         )
 
+    # L'image est placée AVANT le texte (meilleure lecture visuelle), et les
+    # consignes partent en « system » avec un point de cache : elles sont
+    # identiques d'une page à l'autre, donc facturées au tarif « lecture de
+    # cache » (~10 %) dès la deuxième page traitée.
+    systeme = [{"type": "text", "text": consignes, "cache_control": {"type": "ephemeral"}}]
     contenu = [
         _bloc_document(page),
-        {"type": "text", "text": f"{consignes}\n\n(Page {page.numero} du document.)"},
+        {
+            "type": "text",
+            "text": f"Transcris cette page (page {page.numero} du document).{rappel_contexte}",
+        },
     ]
 
     derniere_erreur: Optional[Exception] = None
@@ -349,6 +366,7 @@ def extraire_page(page: Page, contexte: str = "") -> PageExtraite:
             with client.messages.stream(
                 model=LLM_MODEL,
                 max_tokens=LLM_MAX_TOKENS,
+                system=systeme,
                 output_config={
                     "effort": LLM_EFFORT,
                     "format": {"type": "json_schema", "schema": SCHEMA_FACTURE},
@@ -372,11 +390,14 @@ def extraire_page(page: Page, contexte: str = "") -> PageExtraite:
             donnees = json.loads(_texte_reponse(message))
             confiance = float(donnees.get("confiance") or 0.0)
             remarques = [str(r) for r in donnees.get("remarques") or []]
+            usage = getattr(message, "usage", None)
+            cache = getattr(usage, "cache_read_input_tokens", 0) or 0
             logger.info(
-                "Page %d lue : %d ligne(s), confiance %.2f",
+                "Page %d lue : %d ligne(s), confiance %.2f%s",
                 page.numero,
                 len(donnees.get("lignes") or []),
                 confiance,
+                f", {cache} jetons servis depuis le cache" if cache else "",
             )
             return PageExtraite(
                 numero=page.numero,
@@ -423,9 +444,103 @@ def extraire_page(page: Page, contexte: str = "") -> PageExtraite:
     )
 
 
+#: Champs numériques confrontés entre deux lectures indépendantes.
+CHAMPS_CHIFFRES = (
+    "index_nouvel",
+    "index_ancien",
+    "consommation",
+    "location_compteur",
+    "tva",
+    "montant_ht",
+    "montant_ttc",
+)
+
+#: Clé technique portant, sur une ligne, les champs où les deux lectures
+#: divergent. Exploitée par `pipeline.construire_lignes` pour marquer la ligne.
+CLE_DIVERGENCES = "_divergences"
+
+
+def _memes_valeurs(gauche: Any, droite: Any) -> bool:
+    """Deux transcriptions désignent-elles la même valeur ?
+
+    La comparaison porte sur le nombre, pas sur son écriture : « 1 234 » et
+    « 1.234 » sont identiques, alors que « 1234 » et « 1284 » divergent.
+    """
+    a, b = parse_nombre(gauche), parse_nombre(droite)
+    if a is not None or b is not None:
+        return a == b
+    return str(gauche or "").strip().upper() == str(droite or "").strip().upper()
+
+
+def confronter(premiere: PageExtraite, seconde: PageExtraite) -> PageExtraite:
+    """Compare deux lectures d'une même page et signale les divergences.
+
+    Une erreur de lecture est rapportée avec autant d'assurance qu'une lecture
+    juste : seule une seconde lecture indépendante permet de la repérer. Les
+    valeurs retenues sont celles de la lecture la plus confiante ; chaque champ
+    divergent est marqué pour qu'un humain tranche sur pièce.
+    """
+    retenue, autre = (
+        (premiere, seconde) if premiere.confiance >= seconde.confiance else (seconde, premiere)
+    )
+    lignes_retenues = retenue.donnees.get("lignes") or []
+    lignes_autres = autre.donnees.get("lignes") or []
+
+    if len(lignes_retenues) != len(lignes_autres):
+        retenue.remarques.append(
+            f"Double lecture : {len(lignes_retenues)} ligne(s) contre "
+            f"{len(lignes_autres)} — le tableau n'a pas été découpé de la même "
+            "façon, contrôle humain nécessaire"
+        )
+        return retenue
+
+    total_divergences = 0
+    for index, (ligne, temoin) in enumerate(zip(lignes_retenues, lignes_autres), start=1):
+        divergences = [
+            champ
+            for champ in CHAMPS_CHIFFRES
+            if not _memes_valeurs(ligne.get(champ), temoin.get(champ))
+        ]
+        if divergences:
+            ligne[CLE_DIVERGENCES] = [
+                f"{champ} : « {ligne.get(champ)} » puis « {temoin.get(champ)} »"
+                for champ in divergences
+            ]
+            total_divergences += len(divergences)
+
+    for champ in ("total_ht", "total_tva", "total_ttc"):
+        if not _memes_valeurs(retenue.donnees.get(champ), autre.donnees.get(champ)):
+            retenue.remarques.append(
+                f"Double lecture : {champ} lu « {retenue.donnees.get(champ)} » "
+                f"puis « {autre.donnees.get(champ)} »"
+            )
+
+    if total_divergences:
+        logger.warning(
+            "Page %d : %d divergence(s) entre les deux lectures — lignes marquées à vérifier",
+            retenue.numero,
+            total_divergences,
+        )
+    else:
+        logger.info("Page %d : les deux lectures concordent sur tous les chiffres", retenue.numero)
+    return retenue
+
+
+def lire_page(page: Page, contexte: str = "") -> PageExtraite:
+    """Lit une page, une ou deux fois selon `CAMWATER_DOUBLE_LECTURE`."""
+    premiere = extraire_page(page, contexte=contexte)
+    if not DOUBLE_LECTURE:
+        return premiere
+    return confronter(premiere, extraire_page(page, contexte=contexte))
+
+
 def _ligne_non_vide(ligne: dict[str, Any]) -> bool:
     """Écarte les lignes entièrement vides renvoyées par mégarde."""
-    return any(str(valeur).strip() for valeur in ligne.values())
+    return any(
+        str(valeur).strip()
+        for cle, valeur in ligne.items()
+        if cle != CLE_DIVERGENCES
+    )
 
 
 def extraire_facture(pages: list[Page]) -> FactureExtraite:
@@ -448,7 +563,7 @@ def extraire_facture(pages: list[Page]) -> FactureExtraite:
         if facture.entete:
             contexte = "\n".join(f"{cle} = {val}" for cle, val in facture.entete.items() if val)
 
-        extraite = extraire_page(page, contexte=contexte)
+        extraite = lire_page(page, contexte=contexte)
         donnees = extraite.donnees
 
         for champ in CHAMPS_ENTETE:
@@ -458,7 +573,12 @@ def extraire_facture(pages: list[Page]) -> FactureExtraite:
 
         for ligne in donnees.get("lignes") or []:
             if isinstance(ligne, dict) and _ligne_non_vide(ligne):
-                facture.lignes.append({k: str(v) for k, v in ligne.items()})
+                facture.lignes.append(
+                    {
+                        cle: valeur if cle == CLE_DIVERGENCES else str(valeur)
+                        for cle, valeur in ligne.items()
+                    }
+                )
 
         for cle, attribut in (
             ("total_ht", "total_ht"),

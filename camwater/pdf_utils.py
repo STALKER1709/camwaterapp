@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import IMAGE_EXTENSIONS, MAX_PAGES, MEDIA_TYPES, PDF_DPI, PDF_EXTENSIONS
+from .image_utils import optimiser_image
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,8 @@ def _convertir_pdf(source: Path, destination: Path, dpi: int) -> list[Page]:
     for numero, image in enumerate(images, start=1):
         cible = destination / f"page_{numero:03d}.png"
         image.save(cible, "PNG")
+        # Réduction maîtrisée à la taille lue par le modèle (cf. image_utils).
+        cible = optimiser_image(cible, destination / f"page_{numero:03d}_prete.png")
         pages.append(Page(numero=numero, chemin=cible, media_type="image/png"))
     logger.info("PDF converti : %s → %d page(s) PNG à %d DPI", source.name, len(pages), dpi)
     return pages
@@ -76,7 +79,13 @@ def preparer_pages(source: Path, dossier_travail: Path, dpi: int = PDF_DPI) -> l
     extension = source.suffix.lower()
 
     if extension in IMAGE_EXTENSIONS:
-        return [Page(numero=1, chemin=source, media_type=MEDIA_TYPES[extension])]
+        # Une photo de téléphone dépasse souvent la taille lue par le modèle :
+        # la réduire ici évite une réduction non maîtrisée côté service, et
+        # allège la facturation en jetons image.
+        dossier_travail.mkdir(parents=True, exist_ok=True)
+        prete = optimiser_image(source, dossier_travail / f"{source.stem}_prete.png")
+        media = "image/png" if prete != source else MEDIA_TYPES[extension]
+        return [Page(numero=1, chemin=prete, media_type=media)]
 
     if extension not in PDF_EXTENSIONS:
         raise ConversionError(f"Extension non prise en charge : « {extension} ».")
