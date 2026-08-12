@@ -36,7 +36,7 @@ Depuis PowerShell, si vous préférez :
 
 ```powershell
 .\demarrer.bat            # démarrage normal
-.\demarrer.bat -Tests     # vérifie l'installation via les 227 tests, sans clé API
+.\demarrer.bat -Tests     # vérifie l'installation via les 233 tests, sans clé API
 ```
 
 Le `.bat` appelle `demarrer.ps1` avec `-ExecutionPolicy Bypass`, ce qui évite le
@@ -129,7 +129,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 .\venv\Scripts\python.exe app.py
 ```
 
-Contrôle de l'installation **sans clé API** (les 227 tests simulent la lecture
+Contrôle de l'installation **sans clé API** (les 233 tests simulent la lecture
 visuelle) :
 
 ```powershell
@@ -221,7 +221,7 @@ camwaterapp/
 ├── docs/
 │   └── exemple_CAMWATER_Pointage_General.xlsx   # exemple de livrable
 │
-├── tests/                      # 227 tests, exécutables sans clé API
+├── tests/                      # 233 tests, exécutables sans clé API
 │
 ├── data/
 │   ├── uploads/                # factures reçues (zone de travail)
@@ -524,15 +524,23 @@ totaux lus vs recalculés, anomalies, détail ligne à ligne).
   secours `.xlsx.bak` est conservée.
 * **Concurrence** — un verrou fichier (`filelock`) sérialise les écritures
   venant de plusieurs postes ou requêtes simultanées.
-* **Doublons, à deux niveaux** — d'abord l'**empreinte SHA-256** du fichier,
-  contrôlée *avant* tout appel au modèle : un fichier déjà intégré est refusé
-  sans frais. Puis, après lecture, l'**identité métier** de la facture, à savoir
-  le couple *(compte client, période)* : un re-scan, un recadrage ou un autre
-  nom de fichier produisent une empreinte différente pour la **même** facture,
-  que seul ce second contrôle peut voir. Les couples déjà présents sont relus
-  dans les feuilles de données, qui font foi. Message renvoyé :
-  *« Facture déjà présente dans le fichier général (compte 0012345678 sur
-  mars-2026) »*. Désactivable avec `CAMWATER_REJETER_DOUBLONS=false`.
+* **Doublons, à deux niveaux** — l'**empreinte SHA-256** du fichier repère un
+  dépôt à l'identique ; l'**identité métier**, le couple *(compte client,
+  période)*, repère un re-scan, un recadrage ou un simple renommage, qui
+  produisent une empreinte différente pour la **même** facture. Les couples
+  déjà présents sont relus dans les feuilles de données, qui font foi. Message
+  renvoyé : *« Facture déjà présente dans le fichier général (compte
+  0012345678 sur mars-2026) »*. Désactivable avec
+  `CAMWATER_REJETER_DOUBLONS=false`.
+* **Le refus est prononcé sous le verrou**, juste avant l'écriture. C'est ce
+  qui le rend fiable en multi-poste : tant que le contrôle précédait la prise
+  du verrou, deux postes pouvaient constater tous deux l'absence de la facture,
+  puis l'écrire tous deux. Mesuré sur dix dépôts simultanés de la même facture,
+  l'ancien enchaînement produisait **dix lignes**, le nouveau en produit une.
+* **Un pré-contrôle subsiste, mais seulement pour l'économie** — l'empreinte
+  SHA-256 est consultée *avant* l'appel au modèle, de sorte qu'un fichier déjà
+  intégré ne coûte pas une lecture visuelle. Il ne garantit rien : c'est le
+  contrôle sous verrou qui tranche.
 
 ---
 
@@ -705,7 +713,7 @@ Toutes les options sont des variables d'environnement, ou un fichier `.env`
 La suite complète tourne **sans clé API** (la lecture visuelle est simulée) :
 
 ```bash
-python -m pytest tests/ -q      # 227 tests
+python -m pytest tests/ -q      # 233 tests
 ```
 
 Couverture : parsing des nombres et formules, dérivations, mapping ministère et

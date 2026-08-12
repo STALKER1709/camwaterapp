@@ -38,7 +38,7 @@ from .config import (
     REJETER_DOUBLONS,
     UPLOAD_DIR,
 )
-from .excel_manager import ExcelError, ExcelManager
+from .excel_manager import DoublonError, ExcelError, ExcelManager
 from .extraction import (
     CLE_DIVERGENCES,
     ExtractionError,
@@ -63,16 +63,6 @@ __all__ = [
 
 class PipelineError(RuntimeError):
     """Erreur bloquante empêchant l'intégration de la facture."""
-
-
-class DoublonError(PipelineError):
-    """La facture est déjà présente : refus volontaire, et non échec de lecture.
-
-    Distincte de `PipelineError` parce qu'elle ne doit **pas** alimenter la
-    feuille « Factures en échec » : la facture est déjà pointée, il n'y a rien
-    à retraiter. Toute autre erreur, elle, laisse une facture déposée sans
-    trace dans le classeur — c'est ce cas qu'il faut inscrire.
-    """
 
 
 # --------------------------------------------------------------------------- #
@@ -302,6 +292,11 @@ def traiter_fichier(
         rapport.empreinte = calculer_empreinte(chemin)
         logger.info("Traitement de %s (sha256 %s…)", chemin.name, rapport.empreinte[:12])
 
+        # Pré-contrôle, pas garantie : il évite une lecture visuelle — donc une
+        # dépense — quand le doublon est déjà détectable. Le refus qui fait foi
+        # est prononcé plus bas par `ajouter_lignes`, sous le verrou du
+        # classeur, seul endroit où deux postes simultanés ne peuvent pas
+        # constater tous deux l'absence avant d'écrire tous deux.
         if REJETER_DOUBLONS:
             deja = excel.fichier_deja_traite(rapport.empreinte)
             if deja:
@@ -325,23 +320,10 @@ def traiter_fichier(
         rapport.lignes = construire_lignes(facture, annee=annee, administration=administration)
         valider_rapport(rapport)
 
-        # Contrôle de doublon **métier**, après lecture : l'empreinte SHA-256
-        # ne repère que le même fichier, alors qu'un re-scan ou un recadrage de
-        # la même facture produit un fichier différent. L'identité réelle d'une
-        # facture est le couple (compte client, période).
-        if REJETER_DOUBLONS:
-            deja_presentes = excel.facture_deja_presente(rapport.lignes)
-            if deja_presentes:
-                details = ", ".join(
-                    f"compte {compte} sur {periode}" for compte, periode in deja_presentes
-                )
-                raise DoublonError(
-                    f"Facture déjà présente dans le fichier général ({details}). "
-                    "Aucune ligne n'a été ajoutée pour éviter un doublon. "
-                    "Si cette facture est bien nouvelle, vérifiez le compte client "
-                    "et la période lus sur le document."
-                )
-
+        # Le contrôle de doublon métier — le couple (compte client, période),
+        # qui repère un re-scan ou un recadrage là où l'empreinte SHA-256 ne
+        # voit qu'un fichier différent — a lieu dans `ajouter_lignes`, sous le
+        # verrou. Le faire ici laisserait la même fenêtre de concurrence.
         rapport.lignes_ecrites = excel.ajouter_lignes(
             rapport.lignes,
             fichier=chemin.name,

@@ -72,9 +72,17 @@ def test_creation_du_classeur_et_des_feuilles(tmp_path):
 
 
 def test_ajout_successif_et_resume(tmp_path):
+    """Cumul de plusieurs écritures dans le Résumé.
+
+    `verifier_doublon=False` : ce test réécrit volontairement la même identité
+    (compte, période) pour vérifier l'agrégation. En usage réel, la seconde
+    écriture serait refusée — c'est justement l'objet du contrôle anti-doublon.
+    """
     gestionnaire = ExcelManager(tmp_path / "pointage.xlsx")
     gestionnaire.ajouter_lignes([_ligne()], fichier="f1.pdf", empreinte="h1")
-    gestionnaire.ajouter_lignes([_ligne(), _ligne()], fichier="f2.pdf", empreinte="h2")
+    gestionnaire.ajouter_lignes(
+        [_ligne(), _ligne()], fichier="f2.pdf", empreinte="h2", verifier_doublon=False
+    )
 
     classeur = load_workbook(gestionnaire.chemin)
     assert classeur["MINSANTE"].max_row == 4  # 1 entête + 3 lignes

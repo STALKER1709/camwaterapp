@@ -8,8 +8,12 @@ Garanties apportées par ce module :
   jamais de ligne à moitié écrite.
 * **Exclusion mutuelle** — un verrou fichier sérialise les écritures
   concurrentes venant de plusieurs postes ou de plusieurs requêtes HTTP.
-* **Idempotence** — la feuille `Journal` conserve l'empreinte SHA-256 de chaque
-  fichier traité, ce qui permet de refuser un doublon.
+* **Idempotence** — une facture déjà pointée est refusée, sur son empreinte
+  SHA-256 (même fichier, lue au `Journal`) ou sur son identité métier
+  (même compte client et même période, lue dans les feuilles de données).
+  Le contrôle a lieu **sous le verrou, juste avant d'écrire** : le faire en
+  amont laisserait deux postes constater tous deux l'absence, puis écrire
+  tous deux.
 * **Traçabilité** — les feuilles `Résumé` et `Anomalies` sont reconstruites à
   chaque enregistrement à partir des données réelles du classeur.
 """
@@ -48,6 +52,7 @@ from .config import (
     MARQUEUR_A_VERIFIER,
     MARQUEUR_ECARTEE,
     MARQUEUR_ILLISIBLE,
+    REJETER_DOUBLONS,
 )
 from .models import STATUT_OK, LigneFacture
 from .periodes import mois_manquants, periode_vers_cle
@@ -55,6 +60,7 @@ from .periodes import mois_manquants, periode_vers_cle
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "DoublonError",
     "ETAT_INCOMPLET",
     "ETAT_MANQUANTE",
     "ETAT_RECUE",
@@ -67,6 +73,19 @@ __all__ = [
 
 class ExcelError(RuntimeError):
     """Le classeur n'a pas pu être lu ou écrit."""
+
+
+class DoublonError(ExcelError):
+    """La facture est déjà présente au classeur : refus volontaire.
+
+    Levée **depuis l'écriture**, sous le verrou, et non par un contrôle
+    préalable : c'est le seul endroit où le constat « absente » et la décision
+    « j'écris » ne peuvent pas être séparés par une autre écriture.
+
+    Distincte d'une erreur de classeur pour que le pipeline la traite comme un
+    refus et non comme un échec de lecture — la facture est déjà pointée, il
+    n'y a rien à retraiter.
+    """
 
 
 # --------------------------------------------------------------------------- #
@@ -618,54 +637,80 @@ class ExcelManager:
 
     # -- API publique ------------------------------------------------------ #
 
-    def fichier_deja_traite(self, empreinte: str) -> Optional[str]:
-        """Retourne le nom du fichier déjà journalisé pour cette empreinte."""
-        if not empreinte or not self.chemin.exists():
+    # -- Lectures anti-doublon --------------------------------------------- #
+    #
+    # Chaque contrôle existe en deux formes : une lecture sur classeur **déjà
+    # ouvert** (utilisée sous le verrou, au moment d'écrire) et un accès public
+    # qui ouvre le fichier en lecture seule. La première fait foi ; la seconde
+    # n'est qu'un pré-contrôle destiné à éviter une dépense inutile.
+
+    @staticmethod
+    def _empreinte_journalisee(classeur: Workbook, empreinte: str) -> Optional[str]:
+        """Nom du fichier déjà journalisé sous cette empreinte, le cas échéant."""
+        if not empreinte or FEUILLE_JOURNAL not in classeur.sheetnames:
+            return None
+        for valeurs in classeur[FEUILLE_JOURNAL].iter_rows(min_row=2, values_only=True):
+            if len(valeurs) >= 3 and valeurs[2] == empreinte:
+                return str(valeurs[1])
+        return None
+
+    def _identites_ecrites(self, classeur: Workbook) -> set[tuple[str, str]]:
+        """Couples (compte client, période) présents dans les feuilles de données."""
+        position_compte = COLONNES.index(CLE_FACTURE[0])
+        position_periode = COLONNES.index(CLE_FACTURE[1])
+        presentes: set[tuple[str, str]] = set()
+        for onglet in self._feuilles_donnees(classeur):
+            for valeurs in onglet.iter_rows(min_row=2, values_only=True):
+                if not valeurs or len(valeurs) <= position_periode:
+                    continue
+                compte = str(valeurs[position_compte] or "").strip()
+                periode = str(valeurs[position_periode] or "").strip()
+                if compte and periode:
+                    presentes.add((compte, periode))
+        return presentes
+
+    def _ouvrir_en_lecture(self, quoi: str) -> Optional[Workbook]:
+        """Ouvre le classeur en lecture seule, ou `None` s'il est illisible."""
+        if not self.chemin.exists():
             return None
         try:
-            classeur = load_workbook(self.chemin, read_only=True, data_only=True)
+            return load_workbook(self.chemin, read_only=True, data_only=True)
         except Exception as exc:
-            logger.warning("Journal illisible (%s) : contrôle de doublon ignoré.", exc)
+            logger.warning("%s illisible (%s) : pré-contrôle de doublon ignoré.", quoi, exc)
+            return None
+
+    def fichier_deja_traite(self, empreinte: str) -> Optional[str]:
+        """Retourne le nom du fichier déjà journalisé pour cette empreinte.
+
+        **Pré-contrôle**, et non garantie : entre cette lecture et l'écriture,
+        un autre poste peut intégrer la même facture. Il sert à éviter une
+        lecture visuelle inutile — donc coûteuse — quand le doublon est déjà
+        détectable. Le refus qui fait foi est prononcé par `ajouter_lignes`.
+        """
+        if not empreinte:
+            return None
+        classeur = self._ouvrir_en_lecture("Journal")
+        if classeur is None:
             return None
         try:
-            if FEUILLE_JOURNAL not in classeur.sheetnames:
-                return None
-            for valeurs in classeur[FEUILLE_JOURNAL].iter_rows(min_row=2, values_only=True):
-                if len(valeurs) >= 3 and valeurs[2] == empreinte:
-                    return str(valeurs[1])
+            return self._empreinte_journalisee(classeur, empreinte)
         finally:
             classeur.close()
-        return None
 
     def factures_presentes(self) -> set[tuple[str, str]]:
         """Couples (compte client, période) déjà écrits dans le classeur.
 
         Lus dans les feuilles de données, qui font foi : le Journal peut avoir
-        été purgé, les lignes réellement présentes non.
+        été purgé, les lignes réellement présentes non. Même réserve que
+        ci-dessus : c'est une lecture, pas un verrou.
         """
-        if not self.chemin.exists():
+        classeur = self._ouvrir_en_lecture("Classeur")
+        if classeur is None:
             return set()
         try:
-            classeur = load_workbook(self.chemin, read_only=True, data_only=True)
-        except Exception as exc:
-            logger.warning("Classeur illisible (%s) : contrôle de doublon ignoré.", exc)
-            return set()
-
-        position_compte = COLONNES.index(CLE_FACTURE[0])
-        position_periode = COLONNES.index(CLE_FACTURE[1])
-        presentes: set[tuple[str, str]] = set()
-        try:
-            for onglet in self._feuilles_donnees(classeur):
-                for valeurs in onglet.iter_rows(min_row=2, values_only=True):
-                    if not valeurs or len(valeurs) <= position_periode:
-                        continue
-                    compte = str(valeurs[position_compte] or "").strip()
-                    periode = str(valeurs[position_periode] or "").strip()
-                    if compte and periode:
-                        presentes.add((compte, periode))
+            return self._identites_ecrites(classeur)
         finally:
             classeur.close()
-        return presentes
 
     def facture_deja_presente(
         self, lignes: Iterable[LigneFacture]
@@ -675,6 +720,12 @@ class ExcelManager:
         Complète le contrôle par empreinte SHA-256, qui ne détecte que le même
         fichier : un re-scan, un recadrage ou un simple changement de nom
         produisent un fichier différent pour la **même** facture.
+
+        **Consultation, pas garantie.** Le refus qui fait foi est prononcé par
+        `ajouter_lignes`, sous le verrou. Cette méthode répond à la question
+        « cette facture est-elle déjà là ? » à un instant donné — pour un écran
+        de supervision ou un pré-contrôle — mais deux appelants peuvent obtenir
+        une réponse vide et écrire tous deux.
         """
         presentes = self.factures_presentes()
         return sorted(identites_facture(lignes) & presentes)
@@ -759,6 +810,32 @@ class ExcelManager:
         logger.info("Facture « %s » inscrite comme à retraiter dans le classeur.", fichier)
         return True
 
+    def _refuser_si_doublon(
+        self, classeur: Workbook, lignes: list[LigneFacture], empreinte: str
+    ) -> None:
+        """Lève `DoublonError` si la facture est déjà au classeur.
+
+        À n'appeler que **sous le verrou**, sur le classeur qui va être écrit :
+        contrôler avant de le prendre laisse une fenêtre pendant laquelle deux
+        postes constatent tous deux l'absence, puis écrivent tous deux.
+        """
+        deja = self._empreinte_journalisee(classeur, empreinte)
+        if deja:
+            raise DoublonError(
+                f"Facture déjà intégrée sous le nom « {deja} » (empreinte identique). "
+                "Aucune ligne n'a été ajoutée pour éviter un doublon."
+            )
+
+        presentes = sorted(identites_facture(lignes) & self._identites_ecrites(classeur))
+        if presentes:
+            details = ", ".join(f"compte {compte} sur {periode}" for compte, periode in presentes)
+            raise DoublonError(
+                f"Facture déjà présente dans le fichier général ({details}). "
+                "Aucune ligne n'a été ajoutée pour éviter un doublon. "
+                "Si cette facture est bien nouvelle, vérifiez le compte client "
+                "et la période lus sur le document."
+            )
+
     def ajouter_lignes(
         self,
         lignes: list[LigneFacture],
@@ -767,18 +844,29 @@ class ExcelManager:
         utilisateur: str = "",
         pages: int = 0,
         confiance: float = 0.0,
+        verifier_doublon: bool = True,
     ) -> int:
         """Ajoute les lignes au classeur et retourne le nombre de lignes écrites.
 
         L'opération est atomique : soit toutes les lignes (plus les feuilles
         Anomalies, Journal et Résumé) sont écrites, soit le classeur reste
         exactement dans son état précédent.
+
+        Lève `DoublonError` si la facture est déjà présente. Le contrôle a lieu
+        sous le verrou, juste avant d'écrire : c'est ce qui le rend fiable
+        quand plusieurs postes déposent en même temps. `verifier_doublon=False`
+        le désactive — réservé aux cas où l'on veut délibérément réécrire la
+        même identité.
         """
         if not lignes:
             return 0
 
         with _verrou_fichier():
             classeur = self._charger()
+
+            if verifier_doublon and REJETER_DOUBLONS:
+                self._refuser_si_doublon(classeur, lignes, empreinte)
+
             for ligne in lignes:
                 # Une ligne sans numéro de compte est nulle : elle est rangée à
                 # part, hors des feuilles par ministère, donc hors de tous les
