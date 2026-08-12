@@ -199,6 +199,18 @@ def _tva_theorique(montant_ht: Decimal) -> Decimal:
     return arrondi(montant_ht * TAUX_TVA)
 
 
+def _exploitable(consommation: Optional[Decimal]) -> bool:
+    """Une consommation peut-elle servir de base de calcul ?
+
+    Une valeur négative ne le peut pas. Elle signale un relevé incohérent —
+    index inversés, compteur remplacé, chiffre mal lu — sans dire lequel, et en
+    tirer un montant reviendrait à inventer une dette négative : le total du
+    ministère s'en trouverait amputé par une ligne que le système sait
+    pourtant douteuse.
+    """
+    return consommation is not None and consommation >= 0
+
+
 def calculer_ligne(brut: dict) -> LigneCalculee:
     """Applique les formules métier et reconstruit les valeurs manquantes.
 
@@ -234,8 +246,19 @@ def calculer_ligne(brut: dict) -> LigneCalculee:
         and resultat.index_nouvel is not None
         and resultat.index_ancien is not None
     ):
-        resultat.consommation = resultat.index_nouvel - resultat.index_ancien
-        resultat.champs_derives.append("consommation")
+        ecart = resultat.index_nouvel - resultat.index_ancien
+        if ecart < 0:
+            # On ne déduit rien d'une différence négative : elle dit qu'un des
+            # deux relevés est faux, pas lequel. Déduire « -50 m³ » puis en
+            # tirer des montants propagerait l'erreur dans les totaux.
+            resultat.anomalies.append(
+                f"Index nouvel ({resultat.index_nouvel}) < Index ancien "
+                f"({resultat.index_ancien}) : écart de {ecart} — index probablement "
+                "inversés ou compteur remplacé. Consommation non déduite."
+            )
+        else:
+            resultat.consommation = ecart
+            resultat.champs_derives.append("consommation")
     elif (
         resultat.consommation is not None
         and resultat.index_nouvel is not None
@@ -256,7 +279,12 @@ def calculer_ligne(brut: dict) -> LigneCalculee:
         if base is not None:
             location = resultat.location_compteur or Decimal(0)
             consommation = (base - location) / PRIX_UNITAIRE
-            if consommation == consommation.to_integral_value():
+            if consommation < 0:
+                resultat.anomalies.append(
+                    f"Montant HT ({base}) inférieur à la location compteur ({location}) : "
+                    "la consommation qui s'en déduirait serait négative — non retenue"
+                )
+            elif consommation == consommation.to_integral_value():
                 resultat.consommation = consommation.to_integral_value()
                 resultat.champs_derives.append("consommation")
             else:
@@ -269,8 +297,10 @@ def calculer_ligne(brut: dict) -> LigneCalculee:
         resultat.location_compteur = Decimal(0)
 
     # -- Étape 3 : montant HT ----------------------------------------------- #
+    # `_exploitable` et non « is not None » : une consommation négative ne sert
+    # ni à calculer un HT, ni à contredire celui qui est imprimé sur la facture.
     ht_theorique: Optional[Decimal] = None
-    if resultat.consommation is not None:
+    if _exploitable(resultat.consommation):
         location = resultat.location_compteur or Decimal(0)
         ht_theorique = resultat.consommation * PRIX_UNITAIRE + location
 
@@ -310,7 +340,7 @@ def calculer_ligne(brut: dict) -> LigneCalculee:
             )
 
     # -- Étape 6 : index manquant reconstructible --------------------------- #
-    if resultat.consommation is not None:
+    if _exploitable(resultat.consommation):
         if resultat.index_nouvel is None and resultat.index_ancien is not None:
             resultat.index_nouvel = resultat.index_ancien + resultat.consommation
             resultat.champs_derives.append("index_nouvel")
@@ -318,9 +348,13 @@ def calculer_ligne(brut: dict) -> LigneCalculee:
             resultat.index_ancien = resultat.index_nouvel - resultat.consommation
             resultat.champs_derives.append("index_ancien")
 
+    # Consommation négative **lue sur la facture** : elle est conservée telle
+    # quelle — le modèle transcrit, il ne corrige pas — mais elle n'a servi à
+    # calculer aucun montant, et la ligne part signalée.
     if resultat.consommation is not None and resultat.consommation < 0:
         resultat.anomalies.append(
-            f"Consommation négative ({resultat.consommation}) — index probablement inversés"
+            f"Consommation négative ({resultat.consommation}) lue sur la facture — "
+            "aucun montant n'en a été déduit"
         )
 
     return resultat

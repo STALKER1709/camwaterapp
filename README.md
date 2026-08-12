@@ -36,7 +36,7 @@ Depuis PowerShell, si vous préférez :
 
 ```powershell
 .\demarrer.bat            # démarrage normal
-.\demarrer.bat -Tests     # vérifie l'installation via les 233 tests, sans clé API
+.\demarrer.bat -Tests     # vérifie l'installation via les 246 tests, sans clé API
 ```
 
 Le `.bat` appelle `demarrer.ps1` avec `-ExecutionPolicy Bypass`, ce qui évite le
@@ -129,7 +129,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 .\venv\Scripts\python.exe app.py
 ```
 
-Contrôle de l'installation **sans clé API** (les 233 tests simulent la lecture
+Contrôle de l'installation **sans clé API** (les 246 tests simulent la lecture
 visuelle) :
 
 ```powershell
@@ -221,7 +221,7 @@ camwaterapp/
 ├── docs/
 │   └── exemple_CAMWATER_Pointage_General.xlsx   # exemple de livrable
 │
-├── tests/                      # 233 tests, exécutables sans clé API
+├── tests/                      # 246 tests, exécutables sans clé API
 │
 ├── data/
 │   ├── uploads/                # factures reçues (zone de travail)
@@ -445,6 +445,23 @@ dérivée (visible dans la colonne `Anomalies` et dans le rapport JSON) :
 
 Une valeur non reconstructible n'est **jamais devinée** : la cellule porte
 `ILLISIBLE` et la ligne est signalée.
+
+**Une consommation négative ne fabrique aucun montant.** Un écart d'index
+négatif — index inversés, compteur remplacé, chiffre mal lu — dit qu'un des
+deux relevés est faux, sans dire lequel. En déduire une consommation puis des
+montants reviendrait à inventer une dette négative, qui viendrait *retrancher*
+au total du ministère. Aucune déduction n'est donc faite à partir d'une valeur
+négative, dans un sens comme dans l'autre :
+
+* `Index nouvel < Index ancien` → la consommation n'est pas déduite ;
+* `HT − Location` négatif → la consommation n'en est pas déduite non plus ;
+* aucun index n'est reconstruit depuis une consommation négative.
+
+La ligne **reste au pointage** avec ses index lus, ses colonnes obligatoires
+passent à `ILLISIBLE`, l'anomalie nomme les deux index en cause, et le total de
+l'administration se déclare *incomplet* (§4.4). En revanche, si la facture
+imprime des montants lisibles, ils font foi et sont exploités normalement : ce
+sont les index qui sont douteux, pas la facture.
 
 ### 5.4 Mapping ministère (`camwater/mapping.py`)
 
@@ -713,7 +730,7 @@ Toutes les options sont des variables d'environnement, ou un fichier `.env`
 La suite complète tourne **sans clé API** (la lecture visuelle est simulée) :
 
 ```bash
-python -m pytest tests/ -q      # 233 tests
+python -m pytest tests/ -q      # 246 tests
 ```
 
 Couverture : parsing des nombres et formules, dérivations, mapping ministère et
