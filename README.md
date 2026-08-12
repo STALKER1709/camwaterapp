@@ -233,6 +233,7 @@ camwaterapp/
 │   └── apercu_pretraitement.py   # compare une facture avant/après préparation
 │
 ├── docs/
+│   ├── master_prompt.md        # prompt autonome, pour un traitement sans l'application
 │   └── exemple_CAMWATER_Pointage_General.xlsx   # exemple de livrable
 │
 ├── tests/                      # 277 tests, exécutables sans clé API
@@ -578,6 +579,13 @@ totaux lus vs recalculés, anomalies, détail ligne à ligne).
 ## 6. Lecture visuelle : prompt et qualité
 
 ### 6.1 Le prompt envoyé au modèle
+
+> **Traiter des factures sans l'application** — `docs/master_prompt.md` est un
+> prompt autonome à donner à Claude avec les PDF en pièce jointe : il couvre la
+> transcription, les formules, le mapping ministère et l'écriture du classeur
+> aux 17 colonnes. Utile pour un traitement ponctuel, un poste sans
+> installation, ou un **PDF contenant plusieurs factures** — cas que
+> l'application fusionne aujourd'hui à tort.
 
 Il est intégralement lisible dans **`camwater/extraction.py`**, constante
 `PROMPT_EXTRACTION`. Points clés :
