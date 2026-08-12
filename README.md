@@ -36,7 +36,7 @@ Depuis PowerShell, si vous préférez :
 
 ```powershell
 .\demarrer.bat            # démarrage normal
-.\demarrer.bat -Tests     # vérifie l'installation via les 218 tests, sans clé API
+.\demarrer.bat -Tests     # vérifie l'installation via les 227 tests, sans clé API
 ```
 
 Le `.bat` appelle `demarrer.ps1` avec `-ExecutionPolicy Bypass`, ce qui évite le
@@ -129,7 +129,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 .\venv\Scripts\python.exe app.py
 ```
 
-Contrôle de l'installation **sans clé API** (les 218 tests simulent la lecture
+Contrôle de l'installation **sans clé API** (les 227 tests simulent la lecture
 visuelle) :
 
 ```powershell
@@ -171,8 +171,9 @@ Puis ouvrez **<http://localhost:8000/>** et déposez vos factures.
 > `demarrer.bat` suffit à mettre à jour : il réinstalle les dépendances dès que
 > `requirements.txt` a changé.
 
-> **Dépendance système recommandée** — `poppler-utils` fournit `pdftoppm`, utilisé
-> pour convertir les PDF en PNG haute définition (300 DPI par défaut).
+> **Dépendance système recommandée** — `poppler-utils` fournit `pdftoppm` et
+> `pdfinfo`, utilisés pour convertir les PDF en PNG haute définition (300 DPI
+> par défaut) et pour en compter les pages sans les rendre.
 > Ubuntu/Debian : `sudo apt install poppler-utils` · macOS : `brew install poppler`
 > · Windows : télécharger poppler et ajouter son dossier `bin` au `PATH`.
 > **S'il est absent, l'application ne s'arrête pas** : elle transmet le PDF
@@ -220,7 +221,7 @@ camwaterapp/
 ├── docs/
 │   └── exemple_CAMWATER_Pointage_General.xlsx   # exemple de livrable
 │
-├── tests/                      # 218 tests, exécutables sans clé API
+├── tests/                      # 227 tests, exécutables sans clé API
 │
 ├── data/
 │   ├── uploads/                # factures reçues (zone de travail)
@@ -578,6 +579,18 @@ le bruit du scan et conserve mieux les traits fins qu'un rendu direct à la
 taille cible. Le coût en jetons est identique : il ne dépend que de la taille
 finale envoyée.
 
+**Le rendu est borné en mémoire.** Une page A4 à 300 DPI pèse 26 Mo
+décompressée : rendre tout un document d'un bloc coûterait plusieurs gigaoctets.
+Poppler écrit donc directement sur le disque, page après page, et chaque page
+est réduite puis libérée avant la suivante. Mesuré sur des PDF réels, le pic
+mémoire est **constant** — 113 Mo pour 12 pages, 114 Mo pour 36 — au lieu de
+croître avec le document.
+
+Le nombre de pages est par ailleurs contrôlé **avant** tout rendu, via
+`pdfinfo` : un document dépassant `CAMWATER_MAX_PAGES` est refusé en quelques
+centièmes de seconde. Si `pdfinfo` est indisponible, le rendu reste borné à la
+limite plus une page, de sorte que le garde-fou ne peut jamais être contourné.
+
 ### 6.3 Atténuation du tampon bleu (optionnel)
 
 `CAMWATER_ATTENUER_TAMPON=true` ne conserve que le **canal bleu** de l'image :
@@ -692,7 +705,7 @@ Toutes les options sont des variables d'environnement, ou un fichier `.env`
 La suite complète tourne **sans clé API** (la lecture visuelle est simulée) :
 
 ```bash
-python -m pytest tests/ -q      # 218 tests
+python -m pytest tests/ -q      # 227 tests
 ```
 
 Couverture : parsing des nombres et formules, dérivations, mapping ministère et

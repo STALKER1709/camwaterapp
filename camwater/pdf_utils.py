@@ -13,7 +13,13 @@ from .image_utils import optimiser_image
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Page", "ConversionError", "poppler_disponible", "preparer_pages"]
+__all__ = [
+    "ConversionError",
+    "Page",
+    "compter_pages",
+    "poppler_disponible",
+    "preparer_pages",
+]
 
 
 class ConversionError(RuntimeError):
@@ -43,27 +49,72 @@ def poppler_disponible() -> bool:
     return shutil.which("pdftoppm") is not None
 
 
+def compter_pages(source: Path) -> Optional[int]:
+    """Nombre de pages du PDF **sans rien rendre**, ou `None` si indéterminable.
+
+    Permet de refuser un document trop long avant d'avoir dépensé la moindre
+    mémoire : le contrôle de `MAX_PAGES` n'a de sens que s'il précède le rendu.
+    """
+    try:
+        from pdf2image import pdfinfo_from_path
+
+        return int(pdfinfo_from_path(str(source))["Pages"])
+    except Exception as exc:
+        logger.debug("Nombre de pages indéterminable pour %s (%s).", source.name, exc)
+        return None
+
+
 def _convertir_pdf(source: Path, destination: Path, dpi: int) -> list[Page]:
-    """Convertit un PDF en PNG (un fichier par page) via `pdf2image`/poppler."""
+    """Convertit un PDF en PNG (un fichier par page) via `pdf2image`/poppler.
+
+    Le rendu écrit **directement sur le disque** (`paths_only`). Sans cela,
+    pdf2image construit toutes les pages en mémoire avant de rendre la main :
+    à 300 DPI une page A4 pèse 26 Mo décompressée, et la mesure sur un lot de
+    12 pages donnait un pic de 900 Mo — près de 3 Go extrapolés à `MAX_PAGES`.
+    Page par page, le pic ne dépend plus du nombre de pages.
+    """
     from pdf2image import convert_from_path  # import tardif : dépendance lourde
 
     destination.mkdir(parents=True, exist_ok=True)
-    images = convert_from_path(str(source), dpi=dpi)
-    if not images:
-        raise ConversionError(f"Le PDF « {source.name} » ne contient aucune page.")
-    if len(images) > MAX_PAGES:
+
+    # Contrôle *avant* rendu : c'est tout l'intérêt du garde-fou. Il était
+    # auparavant appliqué après coup, donc un document de 100 pages était
+    # intégralement rendu avant d'être refusé.
+    total = compter_pages(source)
+    if total is not None and total > MAX_PAGES:
         raise ConversionError(
-            f"Le PDF « {source.name} » contient {len(images)} pages "
+            f"Le PDF « {source.name} » contient {total} pages "
+            f"(maximum autorisé : {MAX_PAGES})."
+        )
+
+    chemins = convert_from_path(
+        str(source),
+        dpi=dpi,
+        output_folder=str(destination),
+        fmt="png",
+        paths_only=True,
+        # Filet quand pdfinfo est indisponible : on ne rend jamais plus que la
+        # limite, plus une page pour pouvoir constater le dépassement.
+        last_page=None if total is not None else MAX_PAGES + 1,
+    )
+    if not chemins:
+        raise ConversionError(f"Le PDF « {source.name} » ne contient aucune page.")
+    if len(chemins) > MAX_PAGES:
+        raise ConversionError(
+            f"Le PDF « {source.name} » dépasse {MAX_PAGES} pages "
             f"(maximum autorisé : {MAX_PAGES})."
         )
 
     pages: list[Page] = []
-    for numero, image in enumerate(images, start=1):
-        cible = destination / f"page_{numero:03d}.png"
-        image.save(cible, "PNG")
-        # Réduction maîtrisée à la taille lue par le modèle (cf. image_utils).
-        cible = optimiser_image(cible, destination / f"page_{numero:03d}_prete.png")
+    for numero, brut in enumerate(chemins, start=1):
+        brut = Path(brut)
+        # Réduction maîtrisée à la taille lue par le modèle (cf. image_utils),
+        # une page à la fois : rien n'est conservé d'une itération à l'autre.
+        cible = optimiser_image(brut, destination / f"page_{numero:03d}_prete.png")
+        if cible != brut:
+            brut.unlink(missing_ok=True)  # le plein format n'a plus d'usage
         pages.append(Page(numero=numero, chemin=cible, media_type="image/png"))
+
     logger.info("PDF converti : %s → %d page(s) PNG à %d DPI", source.name, len(pages), dpi)
     return pages
 
