@@ -5,7 +5,13 @@ python-multipart>=0.0.9        # upload de fichiers (multipart/form-data)
 aiofiles>=23.2                 # I/O fichiers non bloquantes
 
 # --- Lecture visuelle (LLM) -------------------------------------------------
-anthropic>=0.69                # SDK officiel Claude (vision + structured outputs)
+# Le plancher n'est pas cosmétique : le code passe `output_config` (schéma JSON
+# imposé + niveau d'effort) et `cache_control`. Le SDK 0.69 n'en connaît aucun,
+# 0.100 est la première version à déclarer `effort` et `format`, et 0.121 est
+# celle contre laquelle le projet est testé. Une version antérieure échoue au
+# premier appel de lecture sur un TypeError qui ne dit pas pourquoi ; le
+# contrôle de `camwater/extraction.py` le rattrape et l'explique.
+anthropic>=0.121,<1.0          # SDK officiel Claude (vision + structured outputs)
 
 # --- Traitement des documents -----------------------------------------------
 pdf2image>=1.17                # conversion PDF -> PNG (nécessite poppler-utils)

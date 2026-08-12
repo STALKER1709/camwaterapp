@@ -42,6 +42,7 @@ from .config import (
     ensure_directories,
 )
 from .excel_manager import ExcelManager
+from .extraction import verifier_version_sdk
 from .logging_setup import configurer_logs
 from .pdf_utils import poppler_disponible
 from .pipeline import traiter_fichier
@@ -78,6 +79,11 @@ def creer_application() -> FastAPI:
                 "poppler-utils absent : les PDF seront transmis nativement au modèle "
                 "au lieu d'être convertis en PNG. Installez poppler pour de meilleurs résultats."
             )
+        # Signalé au démarrage plutôt qu'au premier dépôt : l'agent apprend le
+        # problème avant d'avoir envoyé une facture, pas après.
+        probleme_sdk = verifier_version_sdk()
+        if probleme_sdk:
+            logger.error("%s", probleme_sdk)
         yield
         logger.info("Arrêt de l'application.")
 
@@ -109,11 +115,13 @@ def creer_application() -> FastAPI:
 
     @application.get("/health")
     async def health() -> dict[str, Any]:
+        probleme_sdk = verifier_version_sdk()
         return {
-            "statut": "ok",
+            "statut": "ok" if not probleme_sdk else "dégradé",
             "version": __version__,
             "modele": LLM_MODEL,
             "conversion_pdf": "poppler" if poppler_disponible() else "repli PDF natif",
+            "sdk_anthropic": probleme_sdk or "compatible",
             "excel": str(EXCEL_PATH),
             "excel_existe": EXCEL_PATH.exists(),
         }

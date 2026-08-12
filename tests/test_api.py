@@ -20,6 +20,18 @@ def test_health(client):
     charge = reponse.json()
     assert charge["statut"] == "ok"
     assert "modele" in charge
+    assert charge["sdk_anthropic"] == "compatible"
+
+
+def test_health_signale_un_sdk_trop_ancien(client, monkeypatch):
+    """La sonde doit rendre le problème visible avant le premier dépôt."""
+    from camwater import api
+
+    monkeypatch.setattr(api, "verifier_version_sdk", lambda: "SDK 0.69 trop ancien")
+    charge = client.get("/health").json()
+
+    assert charge["statut"] == "dégradé"
+    assert "0.69" in charge["sdk_anthropic"]
 
 
 def test_page_accueil(client):

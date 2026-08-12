@@ -40,10 +40,12 @@ __all__ = [
     "FactureExtraite",
     "PROMPT_EXTRACTION",
     "SCHEMA_FACTURE",
+    "VERSION_SDK_MINIMALE",
     "confronter",
     "extraire_facture",
     "extraire_page",
     "lire_page",
+    "verifier_version_sdk",
 ]
 
 
@@ -223,6 +225,57 @@ class FactureExtraite:
 
 _client = None
 
+#: Version minimale du SDK Anthropic. Le code passe `output_config` (schéma JSON
+#: imposé + niveau d'effort) et `cache_control` : le SDK 0.69 n'en connaît aucun,
+#: et un environnement qui résout vers un plancher trop bas — miroir de paquets
+#: d'entreprise, `pip install --no-index`, venv ancien jamais mis à jour —
+#: échouerait au premier appel sur un `TypeError` muet sur la cause.
+VERSION_SDK_MINIMALE = (0, 121)
+
+
+def _version_installee() -> Optional[tuple[int, ...]]:
+    """Version du SDK sous forme comparable, ou `None` si non interprétable."""
+    try:
+        from anthropic import __version__
+    except Exception:  # pragma: no cover - SDK absent, traité en amont
+        return None
+
+    fragments: list[int] = []
+    for fragment in str(__version__).split("."):
+        chiffres = ""
+        for caractere in fragment:
+            if not caractere.isdigit():
+                break
+            chiffres += caractere
+        if not chiffres:
+            break
+        fragments.append(int(chiffres))
+    return tuple(fragments) or None
+
+
+def verifier_version_sdk() -> Optional[str]:
+    """Retourne un message d'action si le SDK installé est trop ancien.
+
+    Retourne `None` quand tout va bien — y compris lorsque la version n'est pas
+    interprétable : refuser de fonctionner faute d'avoir su lire un numéro de
+    version serait pire que de laisser l'appel tenter sa chance.
+    """
+    installee = _version_installee()
+    if installee is None or installee >= VERSION_SDK_MINIMALE:
+        return None
+
+    lisible = ".".join(str(n) for n in installee)
+    minimale = ".".join(str(n) for n in VERSION_SDK_MINIMALE)
+    return (
+        f"Le paquet « anthropic » installé est en version {lisible}, trop ancienne "
+        f"pour cette application (minimum {minimale}). Les versions antérieures ne "
+        "connaissent pas les paramètres de lecture utilisés ici, et l'appel "
+        "échouerait sans expliquer pourquoi. Mettez à jour avec :\n"
+        "    pip install -r requirements.txt --upgrade\n"
+        "Sous Windows, relancer demarrer.bat suffit : il réinstalle les "
+        "dépendances dès que requirements.txt a changé."
+    )
+
 
 def _obtenir_client():
     """Instancie (une seule fois) le client Anthropic."""
@@ -235,6 +288,10 @@ def _obtenir_client():
         raise ExtractionError(
             "Le paquet « anthropic » n'est pas installé : pip install -r requirements.txt"
         ) from exc
+
+    probleme = verifier_version_sdk()
+    if probleme:
+        raise ExtractionError(probleme)
 
     if not ANTHROPIC_API_KEY:
         # Le SDK sait aussi lire un profil `ant auth login` ; on n'échoue donc

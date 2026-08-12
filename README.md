@@ -36,7 +36,7 @@ Depuis PowerShell, si vous préférez :
 
 ```powershell
 .\demarrer.bat            # démarrage normal
-.\demarrer.bat -Tests     # vérifie l'installation via les 198 tests, sans clé API
+.\demarrer.bat -Tests     # vérifie l'installation via les 218 tests, sans clé API
 ```
 
 Le `.bat` appelle `demarrer.ps1` avec `-ExecutionPolicy Bypass`, ce qui évite le
@@ -129,7 +129,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 .\venv\Scripts\python.exe app.py
 ```
 
-Contrôle de l'installation **sans clé API** (les 198 tests simulent la lecture
+Contrôle de l'installation **sans clé API** (les 218 tests simulent la lecture
 visuelle) :
 
 ```powershell
@@ -161,6 +161,15 @@ Puis ouvrez **<http://localhost:8000/>** et déposez vos factures.
 > * Les journaux sont forcés en UTF-8 : les symboles `≠`, `→`, `−` des messages
 >   d'anomalie s'affichent correctement même quand la sortie est redirigée vers
 >   un fichier ou un service Windows.
+
+> **Version du SDK Anthropic** — le code utilise des paramètres de lecture
+> (`output_config`, `cache_control`) absents des versions anciennes du paquet
+> `anthropic` : le minimum est **0.121**. Un venv plus ancien échouerait au
+> premier dépôt de facture sur une erreur muette sur la cause ; l'application
+> contrôle donc la version **au démarrage** et le dit en clair, et
+> `GET /health` expose l'information (`sdk_anthropic`). Sous Windows, relancer
+> `demarrer.bat` suffit à mettre à jour : il réinstalle les dépendances dès que
+> `requirements.txt` a changé.
 
 > **Dépendance système recommandée** — `poppler-utils` fournit `pdftoppm`, utilisé
 > pour convertir les PDF en PNG haute définition (300 DPI par défaut).
@@ -211,7 +220,7 @@ camwaterapp/
 ├── docs/
 │   └── exemple_CAMWATER_Pointage_General.xlsx   # exemple de livrable
 │
-├── tests/                      # 198 tests, exécutables sans clé API
+├── tests/                      # 218 tests, exécutables sans clé API
 │
 ├── data/
 │   ├── uploads/                # factures reçues (zone de travail)
@@ -683,7 +692,7 @@ Toutes les options sont des variables d'environnement, ou un fichier `.env`
 La suite complète tourne **sans clé API** (la lecture visuelle est simulée) :
 
 ```bash
-python -m pytest tests/ -q      # 198 tests
+python -m pytest tests/ -q      # 218 tests
 ```
 
 Couverture : parsing des nombres et formules, dérivations, mapping ministère et
@@ -721,6 +730,7 @@ confiance au raisonnement :
 | `Impossible d'ouvrir … xlsx` | Le classeur est ouvert dans Excel : fermez-le. Une sauvegarde `.xlsx.bak` est disponible |
 | `Facture déjà intégrée sous le nom …` | Contenu identique déjà traité (protection anti-doublon) ; `CAMWATER_REJETER_DOUBLONS=false` pour l'ignorer |
 | `Réponse tronquée … augmentez CAMWATER_MAX_TOKENS` | Facture très longue : passez `CAMWATER_MAX_TOKENS` à 64000 |
+| `Le paquet « anthropic » installé est en version … trop ancienne` | Le SDK ne connaît pas les paramètres de lecture utilisés ici. `pip install -r requirements.txt --upgrade` ; sous Windows, relancer `demarrer.bat` suffit |
 | Beaucoup de lignes `À_VÉRIFIER` | Consultez l'onglet `Anomalies` et les rapports `data/reports/*.json` : la cause exacte y est écrite ligne par ligne |
 | Ministère `À_VÉRIFIER` récurrent | Ajoutez un pattern via `CAMWATER_MAPPING_FILE`, ou renseignez le champ « Administration » à l'upload |
 
