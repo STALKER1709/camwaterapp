@@ -15,8 +15,15 @@ import argparse
 import os
 import sys
 
-from camwater.config import ANTHROPIC_API_KEY, EXCEL_PATH, LLM_MODEL, ensure_directories
+from camwater.config import (
+    ANTHROPIC_API_KEY,
+    AUTH_ACTIVE,
+    EXCEL_PATH,
+    LLM_MODEL,
+    ensure_directories,
+)
 from camwater.logging_setup import configurer_logs
+from camwater.securite import hote_effectif
 
 
 def main() -> int:
@@ -35,9 +42,17 @@ def main() -> int:
             "qu'aucune authentification (clé API ou profil `ant auth login`) n'est disponible."
         )
 
+    # Sans mot de passe, une demande d'écoute sur le réseau est ramenée à la
+    # machine locale : le classeur ne s'expose pas par simple oubli.
+    hote, avertissement = hote_effectif(arguments.host)
+    if avertissement:
+        logger.warning("%s", avertissement)
+
     logger.info("Modèle de lecture : %s", LLM_MODEL)
     logger.info("Excel général     : %s", EXCEL_PATH)
-    logger.info("Interface web     : http://%s:%d/", arguments.host, arguments.port)
+    logger.info("Accès             : %s", "mot de passe requis" if AUTH_ACTIVE
+                else "machine locale uniquement")
+    logger.info("Interface web     : http://%s:%d/", hote, arguments.port)
 
     try:
         import uvicorn
@@ -47,7 +62,7 @@ def main() -> int:
 
     uvicorn.run(
         "camwater.api:app",
-        host=arguments.host,
+        host=hote,
         port=arguments.port,
         reload=arguments.reload,
         log_config=None,  # on garde la configuration de logging_setup

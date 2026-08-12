@@ -33,6 +33,8 @@ from starlette.concurrency import run_in_threadpool
 from . import __version__
 from .config import (
     ALLOWED_EXTENSIONS,
+    AUTH_ACTIVE,
+    AUTH_UTILISATEUR,
     EXCEL_PATH,
     LLM_MODEL,
     MAX_UPLOAD_BYTES,
@@ -46,6 +48,7 @@ from .extraction import verifier_version_sdk
 from .logging_setup import configurer_logs
 from .pdf_utils import poppler_disponible
 from .pipeline import traiter_fichier
+from .securite import acces_autorise
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +87,15 @@ def creer_application() -> FastAPI:
         probleme_sdk = verifier_version_sdk()
         if probleme_sdk:
             logger.error("%s", probleme_sdk)
+        if AUTH_ACTIVE:
+            logger.info(
+                "Accès protégé par mot de passe (utilisateur « %s »).", AUTH_UTILISATEUR
+            )
+        else:
+            logger.info(
+                "Aucun mot de passe défini : accès réservé à cette machine. "
+                "Définissez CAMWATER_MOT_DE_PASSE pour ouvrir aux autres postes."
+            )
         yield
         logger.info("Arrêt de l'application.")
 
@@ -97,6 +109,24 @@ def creer_application() -> FastAPI:
         ),
     )
     excel = ExcelManager()
+
+    @application.middleware("http")
+    async def controler_l_acces(requete, appeler_suivant):
+        """Refuse tout accès non authentifié quand un mot de passe est défini.
+
+        Placé en middleware plutôt qu'en dépendance de chaque route : un
+        endpoint ajouté plus tard est protégé d'office, sans qu'on ait à y
+        penser. Y compris `/docs` et `/openapi.json`, qui décrivent l'API.
+        """
+        if acces_autorise(requete.url.path, requete.headers.get("authorization")):
+            return await appeler_suivant(requete)
+        return JSONResponse(
+            {"detail": "Authentification requise."},
+            status_code=401,
+            # Sans cet en-tête, le navigateur affiche une page d'erreur au lieu
+            # de demander les identifiants.
+            headers={"WWW-Authenticate": 'Basic realm="CAMWATER", charset="UTF-8"'},
+        )
 
     # ------------------------------------------------------------------ #
     # Pages et sondes

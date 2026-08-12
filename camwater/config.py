@@ -223,6 +223,25 @@ FEUILLE_UNIQUE = os.getenv("CAMWATER_FEUILLE_UNIQUE", "").strip()
 #: Refuser deux fois le même fichier (même empreinte SHA-256).
 REJETER_DOUBLONS = _env_bool("CAMWATER_REJETER_DOUBLONS", True)
 
+# --------------------------------------------------------------------------- #
+# Accès à l'interface web
+# --------------------------------------------------------------------------- #
+#
+# Le classeur général et les rapports contiennent des numéros de compte, des
+# montants et la ventilation par ministère de toutes les administrations. Sans
+# mot de passe, l'application ne s'ouvre donc **pas** au réseau : elle se
+# restreint d'elle-même à la machine locale. Ouvrir aux autres postes est un
+# acte délibéré, qui suppose d'avoir défini un mot de passe.
+
+AUTH_UTILISATEUR = os.getenv("CAMWATER_UTILISATEUR", "camwater").strip() or "camwater"
+AUTH_MOT_DE_PASSE = os.getenv("CAMWATER_MOT_DE_PASSE", "")
+
+#: L'authentification n'est active que si un mot de passe a été défini.
+AUTH_ACTIVE = bool(AUTH_MOT_DE_PASSE)
+
+#: Adresses depuis lesquelles on considère être « sur la machine elle-même ».
+HOTES_LOCAUX = frozenset({"127.0.0.1", "localhost", "::1"})
+
 MOIS_FR = (
     "janv",
     "févr",

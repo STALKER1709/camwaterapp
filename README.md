@@ -36,7 +36,7 @@ Depuis PowerShell, si vous préférez :
 
 ```powershell
 .\demarrer.bat            # démarrage normal
-.\demarrer.bat -Tests     # vérifie l'installation via les 246 tests, sans clé API
+.\demarrer.bat -Tests     # vérifie l'installation via les 277 tests, sans clé API
 ```
 
 Le `.bat` appelle `demarrer.ps1` avec `-ExecutionPolicy Bypass`, ce qui évite le
@@ -129,7 +129,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 .\venv\Scripts\python.exe app.py
 ```
 
-Contrôle de l'installation **sans clé API** (les 246 tests simulent la lecture
+Contrôle de l'installation **sans clé API** (les 277 tests simulent la lecture
 visuelle) :
 
 ```powershell
@@ -161,6 +161,19 @@ Puis ouvrez **<http://localhost:8000/>** et déposez vos factures.
 > * Les journaux sont forcés en UTF-8 : les symboles `≠`, `→`, `−` des messages
 >   d'anomalie s'affichent correctement même quand la sortie est redirigée vers
 >   un fichier ou un service Windows.
+
+> **Accès depuis les autres postes** — le classeur général et les rapports
+> contiennent des numéros de compte et des montants. **Sans mot de passe,
+> l'application n'écoute que la machine locale** : elle refuse de s'exposer au
+> réseau par simple oubli, et le dit dans le journal au démarrage. Pour ouvrir
+> l'accès aux autres postes, ajoutez dans `.env` :
+>
+> ```
+> CAMWATER_MOT_DE_PASSE=un-mot-de-passe-solide
+> ```
+>
+> Le navigateur le demandera au premier accès (utilisateur `camwater`, réglable
+> par `CAMWATER_UTILISATEUR`). Un seul mot de passe suffit pour tous les postes.
 
 > **Version du SDK Anthropic** — le code utilise des paramètres de lecture
 > (`output_config`, `cache_control`) absents des versions anciennes du paquet
@@ -207,6 +220,7 @@ camwaterapp/
 │   ├── calculs.py              # parsing des nombres + formules de facturation
 │   ├── periodes.py             # périodes « mars-2026 » et mois manquants
 │   ├── mapping.py              # règles d'affectation du ministère
+│   ├── securite.py             # accès à l'interface web (mot de passe, écoute)
 │   ├── validation.py           # contrôles de cohérence + rapports d'erreur
 │   ├── excel_manager.py        # écriture transactionnelle du classeur
 │   └── watcher.py              # mode « dossier partagé » (sans frontend)
@@ -221,7 +235,7 @@ camwaterapp/
 ├── docs/
 │   └── exemple_CAMWATER_Pointage_General.xlsx   # exemple de livrable
 │
-├── tests/                      # 246 tests, exécutables sans clé API
+├── tests/                      # 277 tests, exécutables sans clé API
 │
 ├── data/
 │   ├── uploads/                # factures reçues (zone de travail)
@@ -710,6 +724,8 @@ Toutes les options sont des variables d'environnement, ou un fichier `.env`
 | `CAMWATER_MODEL` | `claude-opus-5` | Modèle de lecture visuelle |
 | `CAMWATER_EFFORT` | `high` | Profondeur d'analyse (`low` → `max`) |
 | `CAMWATER_PORT` | `8000` | Port d'écoute |
+| `CAMWATER_MOT_DE_PASSE` | *(vide)* | Ouvre l'accès au réseau ; vide = machine locale seule |
+| `CAMWATER_UTILISATEUR` | `camwater` | Nom d'utilisateur demandé par le navigateur |
 | `CAMWATER_PDF_DPI` | `300` | Résolution de conversion PDF → PNG |
 | `CAMWATER_COTE_LONG` | `2576` | Grand côté de l'image envoyée au modèle |
 | `CAMWATER_DOUBLE_LECTURE` | `false` | Deux lectures confrontées (coût ×2) |
@@ -730,7 +746,7 @@ Toutes les options sont des variables d'environnement, ou un fichier `.env`
 La suite complète tourne **sans clé API** (la lecture visuelle est simulée) :
 
 ```bash
-python -m pytest tests/ -q      # 246 tests
+python -m pytest tests/ -q      # 277 tests
 ```
 
 Couverture : parsing des nombres et formules, dérivations, mapping ministère et
@@ -769,6 +785,8 @@ confiance au raisonnement :
 | `Facture déjà intégrée sous le nom …` | Contenu identique déjà traité (protection anti-doublon) ; `CAMWATER_REJETER_DOUBLONS=false` pour l'ignorer |
 | `Réponse tronquée … augmentez CAMWATER_MAX_TOKENS` | Facture très longue : passez `CAMWATER_MAX_TOKENS` à 64000 |
 | `Le paquet « anthropic » installé est en version … trop ancienne` | Le SDK ne connaît pas les paramètres de lecture utilisés ici. `pip install -r requirements.txt --upgrade` ; sous Windows, relancer `demarrer.bat` suffit |
+| Les autres postes n'accèdent pas à l'interface | Aucun mot de passe défini : l'écoute est restreinte à la machine locale. Ajoutez `CAMWATER_MOT_DE_PASSE` dans `.env` et relancez |
+| Le navigateur redemande le mot de passe en boucle | Mot de passe erroné dans `.env`, ou espaces parasites autour de la valeur |
 | Beaucoup de lignes `À_VÉRIFIER` | Consultez l'onglet `Anomalies` et les rapports `data/reports/*.json` : la cause exacte y est écrite ligne par ligne |
 | Ministère `À_VÉRIFIER` récurrent | Ajoutez un pattern via `CAMWATER_MAPPING_FILE`, ou renseignez le champ « Administration » à l'upload |
 
