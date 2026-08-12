@@ -41,6 +41,7 @@ from .config import (
     EXCEL_PATH,
     FEUILLE_ANOMALIES,
     FEUILLE_ECARTEES,
+    FEUILLE_ECHECS,
     FEUILLE_JOURNAL,
     FEUILLE_RESUME,
     FEUILLE_UNIQUE,
@@ -53,7 +54,15 @@ from .periodes import mois_manquants, periode_vers_cle
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ExcelManager", "ExcelError", "identites_facture", "nom_feuille"]
+__all__ = [
+    "ETAT_INCOMPLET",
+    "ETAT_MANQUANTE",
+    "ETAT_RECUE",
+    "ExcelError",
+    "ExcelManager",
+    "identites_facture",
+    "nom_feuille",
+]
 
 
 class ExcelError(RuntimeError):
@@ -71,6 +80,10 @@ _FOND_A_VERIFIER = PatternFill("solid", fgColor="FFF2CC")
 _FOND_ILLISIBLE = PatternFill("solid", fgColor="F8CBAD")
 _FOND_ECARTEE = PatternFill("solid", fgColor="E7E6E6")
 _FOND_MOIS_MANQUANT = PatternFill("solid", fgColor="FCE4EC")
+#: Total sous-évalué : au moins un chiffre de l'administration n'a pas été lu.
+_FOND_INCOMPLET = PatternFill("solid", fgColor="FFF2CC")
+#: Facture déposée mais non lue : elle reste à retraiter.
+_FOND_ECHEC = PatternFill("solid", fgColor="F8CBAD")
 _FORMAT_NOMBRE = "#,##0"
 _LARGEURS = {
     "DR": 14,
@@ -102,6 +115,21 @@ _ENTETES_RESUME = (
 
 ETAT_RECUE = "Reçue"
 ETAT_MANQUANTE = "MANQUANTE"
+
+#: Une administration dont au moins un chiffre est illisible : les montants de
+#: sa ligne de Résumé sont des **minorants**, jamais le total réel. Sans cette
+#: mention, un total sous-évalué se lit comme un total définitif.
+ETAT_INCOMPLET = "Reçue — total incomplet"
+
+#: Colonnes de la feuille des factures en échec.
+_ENTETES_ECHECS = (
+    "Horodatage",
+    "Fichier source",
+    "Empreinte SHA-256",
+    "Utilisateur",
+    "Pages lues",
+    "Motif de l'échec",
+)
 
 #: Colonnes techniques ajoutées après les 17 colonnes standard.
 COLONNES_TECHNIQUES = ("Statut", "Fichier source", "Anomalies")
@@ -258,6 +286,11 @@ class ExcelManager:
         self._styliser_entete(feuille, list(COLONNES) + list(COLONNES_TECHNIQUES))
         return feuille
 
+    def _creer_feuille_echecs(self, classeur: Workbook) -> Worksheet:
+        feuille = classeur.create_sheet(FEUILLE_ECHECS)
+        self._styliser_entete(feuille, _ENTETES_ECHECS)
+        return feuille
+
     def _creer_feuille_journal(self, classeur: Workbook) -> Worksheet:
         feuille = classeur.create_sheet(FEUILLE_JOURNAL)
         self._styliser_entete(
@@ -290,11 +323,19 @@ class ExcelManager:
             return self._creer_feuille_journal(classeur)
         if nom == FEUILLE_ECARTEES:
             return self._creer_feuille_ecartees(classeur)
+        if nom == FEUILLE_ECHECS:
+            return self._creer_feuille_echecs(classeur)
         return self._creer_feuille_donnees(classeur, nom)
 
     @staticmethod
     def _feuilles_donnees(classeur: Workbook) -> list[Worksheet]:
-        reservees = {FEUILLE_RESUME, FEUILLE_ANOMALIES, FEUILLE_JOURNAL, FEUILLE_ECARTEES}
+        reservees = {
+            FEUILLE_RESUME,
+            FEUILLE_ANOMALIES,
+            FEUILLE_JOURNAL,
+            FEUILLE_ECARTEES,
+            FEUILLE_ECHECS,
+        }
         return [classeur[nom] for nom in classeur.sheetnames if nom not in reservees]
 
     # -- Écriture ---------------------------------------------------------- #
@@ -397,6 +438,17 @@ class ExcelManager:
             for valeurs in onglet.iter_rows(min_row=2, values_only=True):
                 if valeurs is None or all(v is None for v in valeurs):
                     continue
+                # Une feuille plus étroite que les 17 colonnes standard (onglet
+                # ajouté à la main, classeur d'un format antérieur) ne doit pas
+                # interrompre le pointage : on la signale et on passe.
+                if len(valeurs) <= positions["Montant TTC"]:
+                    logger.warning(
+                        "Feuille « %s » : ligne de %d colonne(s) au lieu de %d — ignorée.",
+                        onglet.title,
+                        len(valeurs),
+                        len(COLONNES),
+                    )
+                    continue
                 administration = str(valeurs[positions["Ministère_2026"]] or MARQUEUR_A_VERIFIER)
                 periode = str(valeurs[positions["Période"]] or "-")
                 statut = (
@@ -414,6 +466,7 @@ class ExcelManager:
                         "ttc": 0.0,
                         "a_verifier": 0.0,
                         "illisible": 0.0,
+                        "non_chiffre": 0.0,
                     },
                 )
                 agregat["lignes"] += 1
@@ -426,6 +479,10 @@ class ExcelManager:
                     valeur = valeurs[positions[colonne]]
                     if isinstance(valeur, (int, float)):
                         agregat[cle] += float(valeur)
+                    elif valeur is not None:
+                        # Un chiffre non lu (« ILLISIBLE ») ne s'additionne pas :
+                        # le total de cette administration devient un minorant.
+                        agregat["non_chiffre"] += 1
                 if statut == MARQUEUR_A_VERIFIER:
                     agregat["a_verifier"] += 1
                 elif statut == MARQUEUR_ILLISIBLE:
@@ -443,7 +500,12 @@ class ExcelManager:
             # sont ainsi couverts — un mois où *aucune* facture n'est arrivée,
             # et un mois où telle administration n'a rien envoyé alors qu'une
             # autre a été pointée.
-            reference = {periode for _, periode in agregats}
+            # Seules les périodes réellement interprétables font référence : une
+            # période illisible (« - ») reprocherait à toutes les autres
+            # administrations l'absence d'une facture pour un mois inexistant.
+            reference = {
+                periode for _, periode in agregats if periode_vers_cle(periode) is not None
+            }
             reference.update(mois_manquants(reference))
             for administration in {adm for adm, _ in agregats}:
                 pointees = {p for adm, p in agregats if adm == administration}
@@ -454,11 +516,26 @@ class ExcelManager:
                 )
 
         lignes_resume: list[tuple[str, str, str, dict[str, float]]] = [
-            (administration, periode, ETAT_RECUE, agregat)
+            (
+                administration,
+                periode,
+                ETAT_INCOMPLET if agregat["non_chiffre"] else ETAT_RECUE,
+                agregat,
+            )
             for (administration, periode), agregat in agregats.items()
         ]
         vide = dict.fromkeys(
-            ("lignes", "consommation", "ht", "tva", "ttc", "a_verifier", "illisible"), 0.0
+            (
+                "lignes",
+                "consommation",
+                "ht",
+                "tva",
+                "ttc",
+                "a_verifier",
+                "illisible",
+                "non_chiffre",
+            ),
+            0.0,
         )
         lignes_resume.extend(
             (administration, periode, ETAT_MANQUANTE, vide)
@@ -485,16 +562,22 @@ class ExcelManager:
                     int(agregat["illisible"]),
                 ]
             )
+            fond = None
             if etat == ETAT_MANQUANTE:
+                fond = _FOND_MOIS_MANQUANT
+            elif etat == ETAT_INCOMPLET:
+                fond = _FOND_INCOMPLET
+            if fond is not None:
                 for index in range(1, len(_ENTETES_RESUME) + 1):
-                    feuille.cell(row=feuille.max_row, column=index).fill = _FOND_MOIS_MANQUANT
+                    feuille.cell(row=feuille.max_row, column=index).fill = fond
 
         if agregats:
+            total_incomplet = any(a["non_chiffre"] for a in agregats.values())
             feuille.append(
                 [
                     "TOTAL GÉNÉRAL",
                     "",
-                    "",
+                    "Total incomplet" if total_incomplet else "",
                     int(sum(a["lignes"] for a in agregats.values())),
                     sum(a["consommation"] for a in agregats.values()),
                     sum(a["ht"] for a in agregats.values()),
@@ -505,7 +588,29 @@ class ExcelManager:
                 ]
             )
             for index in range(1, len(_ENTETES_RESUME) + 1):
-                feuille.cell(row=feuille.max_row, column=index).font = Font(bold=True)
+                cellule = feuille.cell(row=feuille.max_row, column=index)
+                cellule.font = Font(bold=True)
+                if total_incomplet:
+                    cellule.fill = _FOND_INCOMPLET
+
+        # Une facture déposée mais non lue n'a produit aucune ligne : sans ce
+        # renvoi, elle n'existe que dans `data/errors/` et le Résumé laisse
+        # croire que tout ce qui a été déposé a été pointé.
+        en_echec = 0
+        if FEUILLE_ECHECS in classeur.sheetnames:
+            en_echec = max(classeur[FEUILLE_ECHECS].max_row - 1, 0)
+        if en_echec:
+            feuille.append(
+                [
+                    "FACTURES EN ÉCHEC",
+                    f"voir la feuille « {FEUILLE_ECHECS} »",
+                    f"{en_echec} fichier(s) à retraiter",
+                ]
+            )
+            for index in range(1, len(_ENTETES_RESUME) + 1):
+                cellule = feuille.cell(row=feuille.max_row, column=index)
+                cellule.font = Font(bold=True)
+                cellule.fill = _FOND_ECHEC
 
         for ligne_index in range(2, feuille.max_row + 1):
             for colonne_index in range(5, 9):
@@ -574,6 +679,86 @@ class ExcelManager:
         presentes = self.factures_presentes()
         return sorted(identites_facture(lignes) & presentes)
 
+    def _purger_echecs(self, classeur: Workbook, empreinte: str, fichier: str) -> int:
+        """Retire de la feuille des échecs les tentatives désormais abouties.
+
+        La feuille des échecs est une liste de travail — ce qui reste à
+        retraiter — et non un historique : une facture réintégrée avec succès
+        n'a plus rien à y faire. Le rapprochement se fait sur l'empreinte quand
+        elle est connue, sinon sur le nom du fichier.
+        """
+        if FEUILLE_ECHECS not in classeur.sheetnames:
+            return 0
+        feuille = classeur[FEUILLE_ECHECS]
+        retirees = 0
+        for index in range(feuille.max_row, 1, -1):
+            ligne_empreinte = str(feuille.cell(row=index, column=3).value or "")
+            ligne_fichier = str(feuille.cell(row=index, column=2).value or "")
+            correspond = (
+                (empreinte and ligne_empreinte == empreinte)
+                or (not empreinte and ligne_fichier == fichier)
+            )
+            if correspond:
+                feuille.delete_rows(index)
+                retirees += 1
+        if retirees:
+            logger.info(
+                "%d tentative(s) en échec retirée(s) : « %s » a finalement été intégrée.",
+                retirees,
+                fichier,
+            )
+        return retirees
+
+    def enregistrer_echec(
+        self,
+        fichier: str,
+        motif: str,
+        empreinte: str = "",
+        utilisateur: str = "",
+        pages: int = 0,
+    ) -> bool:
+        """Inscrit au classeur une facture déposée dont la lecture a échoué.
+
+        Une facture présentée est valable : même illisible, elle doit rester
+        visible dans le pointage, sans quoi elle n'existe que dans
+        `data/errors/` et rien n'indique qu'elle attend d'être retraitée.
+
+        L'empreinte n'est **pas** portée au Journal : celui-ci sert au contrôle
+        de doublon, et y inscrire un échec ferait refuser le même fichier lors
+        de la nouvelle tentative — exactement l'inverse du but recherché.
+
+        Ne lève jamais : échouer à enregistrer un échec ne doit pas masquer
+        l'erreur d'origine. Retourne `True` si la ligne a bien été écrite.
+        """
+        try:
+            with _verrou_fichier():
+                classeur = self._charger()
+                feuille = self._feuille(classeur, FEUILLE_ECHECS)
+                feuille.append(
+                    [
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        fichier,
+                        empreinte,
+                        utilisateur or "-",
+                        pages,
+                        " ".join(str(motif).split()),
+                    ]
+                )
+                for index in range(1, len(_ENTETES_ECHECS) + 1):
+                    feuille.cell(row=feuille.max_row, column=index).fill = _FOND_ECHEC
+                self._reconstruire_resume(classeur)
+                self._enregistrer(classeur)
+        except Exception as exc:
+            logger.error(
+                "Impossible d'inscrire l'échec de « %s » au classeur (%s) : "
+                "la facture reste tracée dans data/errors/ et son rapport JSON.",
+                fichier,
+                exc,
+            )
+            return False
+        logger.info("Facture « %s » inscrite comme à retraiter dans le classeur.", fichier)
+        return True
+
     def ajouter_lignes(
         self,
         lignes: list[LigneFacture],
@@ -606,6 +791,8 @@ class ExcelManager:
 
             self._ajouter_anomalies(classeur, lignes, fichier)
             self._journaliser(classeur, fichier, empreinte, utilisateur, pages, lignes, confiance)
+            # La facture est intégrée : elle n'est plus à retraiter.
+            self._purger_echecs(classeur, empreinte, fichier)
             self._reconstruire_resume(classeur)
             self._enregistrer(classeur)
 

@@ -52,11 +52,27 @@ from .validation import ecrire_rapport, valider_rapport
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["PipelineError", "calculer_empreinte", "normaliser_periode", "traiter_fichier"]
+__all__ = [
+    "DoublonError",
+    "PipelineError",
+    "calculer_empreinte",
+    "normaliser_periode",
+    "traiter_fichier",
+]
 
 
 class PipelineError(RuntimeError):
     """Erreur bloquante empêchant l'intégration de la facture."""
+
+
+class DoublonError(PipelineError):
+    """La facture est déjà présente : refus volontaire, et non échec de lecture.
+
+    Distincte de `PipelineError` parce qu'elle ne doit **pas** alimenter la
+    feuille « Factures en échec » : la facture est déjà pointée, il n'y a rien
+    à retraiter. Toute autre erreur, elle, laisse une facture déposée sans
+    trace dans le classeur — c'est ce cas qu'il faut inscrire.
+    """
 
 
 # --------------------------------------------------------------------------- #
@@ -289,7 +305,7 @@ def traiter_fichier(
         if REJETER_DOUBLONS:
             deja = excel.fichier_deja_traite(rapport.empreinte)
             if deja:
-                raise PipelineError(
+                raise DoublonError(
                     f"Facture déjà intégrée sous le nom « {deja} » (empreinte identique). "
                     "Aucune ligne n'a été ajoutée pour éviter un doublon."
                 )
@@ -319,7 +335,7 @@ def traiter_fichier(
                 details = ", ".join(
                     f"compte {compte} sur {periode}" for compte, periode in deja_presentes
                 )
-                raise PipelineError(
+                raise DoublonError(
                     f"Facture déjà présente dans le fichier général ({details}). "
                     "Aucune ligne n'a été ajoutée pour éviter un doublon. "
                     "Si cette facture est bien nouvelle, vérifiez le compte client "
@@ -336,6 +352,11 @@ def traiter_fichier(
         )
         rapport.succes = True
 
+    except DoublonError as exc:
+        # Refus volontaire : la facture est déjà pointée, rien à retraiter.
+        rapport.erreur = str(exc)
+        rapport.doublon = True
+        logger.warning("Facture refusée (doublon) : %s — %s", chemin.name, exc)
     except (ConversionError, ExtractionError, ExcelError, PipelineError) as exc:
         rapport.erreur = str(exc)
         logger.error("Échec du traitement de %s : %s", chemin.name, exc)
@@ -344,6 +365,18 @@ def traiter_fichier(
         logger.exception("Erreur inattendue lors du traitement de %s", chemin.name)
 
     finally:
+        # Une facture présentée est valable : si elle n'a produit aucune ligne,
+        # elle doit malgré tout figurer au classeur comme restant à retraiter.
+        # Un doublon en est exclu : il est déjà pointé.
+        if not rapport.succes and not rapport.doublon:
+            rapport.inscrit_en_echec = excel.enregistrer_echec(
+                fichier=chemin.name,
+                motif=rapport.erreur or "Cause inconnue",
+                empreinte=rapport.empreinte,
+                utilisateur=utilisateur,
+                pages=rapport.pages,
+            )
+
         rapport.duree_secondes = time.monotonic() - debut
         if dossier_travail.exists():
             shutil.rmtree(dossier_travail, ignore_errors=True)

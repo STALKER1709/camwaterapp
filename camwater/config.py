@@ -201,6 +201,13 @@ FEUILLE_ANOMALIES = "Anomalies"
 FEUILLE_JOURNAL = "Journal"
 FEUILLE_ECARTEES = "Lignes écartées"
 
+#: Factures déposées dont la lecture a échoué. Une facture présentée est
+#: valable : même illisible, elle doit rester visible dans le classeur, sans
+#: quoi elle n'existe que dans `data/errors/` et personne ne sait qu'elle
+#: attend d'être retraitée. La ligne disparaît d'elle-même dès que la facture
+#: est intégrée avec succès.
+FEUILLE_ECHECS = "Factures en échec"
+
 #: Colonne identifiant une facture au sens métier : deux factures partageant le
 #: même compte client et la même période sont un doublon, même si les fichiers
 #: scannés diffèrent (re-scan, recadrage, autre nom de fichier).

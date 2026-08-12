@@ -11,6 +11,7 @@ import pytest
 from openpyxl import load_workbook
 
 from camwater import pipeline, validation
+from camwater.config import FEUILLE_ECHECS
 from camwater.excel_manager import ExcelManager
 from camwater.extraction import ExtractionError, FactureExtraite
 
@@ -140,8 +141,21 @@ def test_echec_de_lecture_archive_en_erreur(environnement, monkeypatch):
     assert "lisible" in rapport.erreur
     assert (environnement["errors"] / "illisible.png").exists()
     assert (environnement["reports"] / "illisible.rapport.json").exists()
-    # Aucun classeur créé : rien n'a été écrit.
-    assert not environnement["excel"].chemin.exists()
+
+    # Une facture présentée est valable : illisible, elle reste inscrite au
+    # classeur comme restant à retraiter — sans quoi elle n'existerait que
+    # dans data/errors/ et personne ne saurait qu'elle attend.
+    assert rapport.inscrit_en_echec is True
+    classeur = load_workbook(environnement["excel"].chemin)
+    assert FEUILLE_ECHECS in classeur.sheetnames
+
+    echecs = list(classeur[FEUILLE_ECHECS].iter_rows(min_row=2, values_only=True))
+    assert len(echecs) == 1
+    assert echecs[0][1] == "illisible.png"
+    assert "lisible" in echecs[0][5]
+
+    # Aucune ligne de facturation n'a pu être lue : le pointage reste vide.
+    assert "MINSANTE" not in classeur.sheetnames
 
 
 def test_incoherence_de_totaux_signalee_sans_blocage(environnement, monkeypatch):

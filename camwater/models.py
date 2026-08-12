@@ -110,6 +110,14 @@ class RapportTraitement:
     chemin_rapport: Optional[str] = None
     duree_secondes: float = 0.0
 
+    #: Refus volontaire : la facture était déjà pointée. Ce n'est pas un échec
+    #: de lecture, et rien ne reste à retraiter.
+    doublon: bool = False
+
+    #: La facture, déposée mais non lue, a été inscrite au classeur comme
+    #: restant à retraiter (feuille « Factures en échec »).
+    inscrit_en_echec: bool = False
+
     # -- Statistiques dérivées --------------------------------------------- #
 
     @property
@@ -160,14 +168,19 @@ class RapportTraitement:
             "anomalies": self.anomalies,
             "remarques": self.remarques,
             "erreur": self.erreur,
+            "doublon": self.doublon,
+            "inscrit_en_echec": self.inscrit_en_echec,
             "chemin_archive": self.chemin_archive,
             "chemin_rapport": self.chemin_rapport,
             "lignes": [ligne.to_dict() for ligne in self.lignes],
         }
 
     def resume(self) -> str:
+        if self.doublon:
+            return f"REFUSÉE — {self.fichier} : {self.erreur}"
         if not self.succes:
-            return f"ÉCHEC — {self.fichier} : {self.erreur}"
+            suffixe = " (inscrite au classeur comme à retraiter)" if self.inscrit_en_echec else ""
+            return f"ÉCHEC — {self.fichier} : {self.erreur}{suffixe}"
         resume = (
             f"OK — {self.fichier} : {self.lignes_ecrites} ligne(s) écrite(s) "
             f"({self.nb_ok} conformes, {self.nb_a_verifier} à vérifier, "

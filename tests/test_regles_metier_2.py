@@ -12,7 +12,12 @@ import pytest
 from openpyxl import load_workbook
 
 from camwater import pipeline, validation
-from camwater.config import FEUILLE_ECARTEES, FEUILLE_RESUME, MARQUEUR_ECARTEE
+from camwater.config import (
+    FEUILLE_ECARTEES,
+    FEUILLE_ECHECS,
+    FEUILLE_RESUME,
+    MARQUEUR_ECARTEE,
+)
 from camwater.excel_manager import ETAT_MANQUANTE, ETAT_RECUE, ExcelManager, identites_facture
 from camwater.extraction import FactureExtraite
 from camwater.models import LigneFacture, RapportTraitement
@@ -282,9 +287,16 @@ def test_rescan_de_la_meme_facture_refuse(environnement, monkeypatch):
     assert "déjà présente" in second.erreur
     assert "0012345678" in second.erreur and "mars-2026" in second.erreur
 
-    # Aucune ligne dupliquée dans le classeur.
+    # Un doublon est un refus volontaire, pas un échec de lecture : la facture
+    # est déjà pointée, il n'y a rien à retraiter.
+    assert second.doublon is True
+    assert second.inscrit_en_echec is False
+
+    # Aucune ligne dupliquée dans le classeur, et aucune entrée « à retraiter ».
     classeur = load_workbook(environnement["excel"].chemin)
     assert classeur["MINSANTE"].max_row == 2
+    if FEUILLE_ECHECS in classeur.sheetnames:
+        assert classeur[FEUILLE_ECHECS].max_row == 1
 
 
 def test_facture_d_un_autre_compte_acceptee(environnement, monkeypatch):

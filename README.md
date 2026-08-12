@@ -36,7 +36,7 @@ Depuis PowerShell, si vous préférez :
 
 ```powershell
 .\demarrer.bat            # démarrage normal
-.\demarrer.bat -Tests     # vérifie l'installation via les 161 tests, sans clé API
+.\demarrer.bat -Tests     # vérifie l'installation via les 174 tests, sans clé API
 ```
 
 Le `.bat` appelle `demarrer.ps1` avec `-ExecutionPolicy Bypass`, ce qui évite le
@@ -129,7 +129,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 .\venv\Scripts\python.exe app.py
 ```
 
-Contrôle de l'installation **sans clé API** (les 161 tests simulent la lecture
+Contrôle de l'installation **sans clé API** (les 174 tests simulent la lecture
 visuelle) :
 
 ```powershell
@@ -211,7 +211,7 @@ camwaterapp/
 ├── docs/
 │   └── exemple_CAMWATER_Pointage_General.xlsx   # exemple de livrable
 │
-├── tests/                      # 161 tests, exécutables sans clé API
+├── tests/                      # 174 tests, exécutables sans clé API
 │
 ├── data/
 │   ├── uploads/                # factures reçues (zone de travail)
@@ -299,11 +299,12 @@ python tools/generer_exemple_excel.py
 
 | Feuille | Contenu |
 |---|---|
-| `Résumé` | Totaux par **administration × période** : état, nb lignes, consommation, HT, TVA, TTC, lignes à vérifier, lignes illisibles, plus une ligne `TOTAL GÉNÉRAL`. **Les mois sans facture y figurent** avec l'état `MANQUANTE` (voir §4.3). Reconstruite intégralement à chaque écriture. |
+| `Résumé` | Totaux par **administration × période** : état, nb lignes, consommation, HT, TVA, TTC, lignes à vérifier, lignes illisibles, plus une ligne `TOTAL GÉNÉRAL`. **Les mois sans facture y figurent** avec l'état `MANQUANTE` (voir §4.3), et un total bâti sur des chiffres illisibles porte la mention **« total incomplet »** (voir §4.4). Reconstruite intégralement à chaque écriture. |
 | *une feuille par ministère* (`MINSANTE`, `MINESEC`, `DGSN`, …) | Les lignes de facturation, 17 colonnes standard + 3 colonnes techniques |
 | `Anomalies` | Une ligne par anomalie : fichier source, feuille, statut, compte client, code abonnement, nom abonné, description |
 | `Lignes écartées` | Les lignes **sans numéro de compte client**, nulles pour le pointage (voir §5.5). Conservées avec leurs 17 colonnes pour contrôle, mais exclues des feuilles par ministère et de tous les totaux |
 | `Journal` | Une ligne par facture intégrée : horodatage, fichier, **empreinte SHA-256**, utilisateur, **compte client**, **période**, pages, lignes écrites/à vérifier/illisibles/écartées, confiance de lecture |
+| `Factures en échec` | Les factures **déposées mais non lues** (scan illisible, poppler absent, crédit API épuisé…) : horodatage, fichier, empreinte, utilisateur, pages lues, motif. C'est la liste de ce qui **reste à retraiter** — une ligne disparaît d'elle-même dès que la facture est intégrée (voir §4.4) |
 
 Pour une **feuille unique** avec une colonne « Administration » plutôt qu'une
 feuille par ministère, définir `CAMWATER_FEUILLE_UNIQUE=Pointage` : la colonne
@@ -351,7 +352,44 @@ Deux manques distincts sont couverts :
 L'étendue de référence va de la plus ancienne à la plus récente période présente
 dans le classeur : le Résumé répond ainsi directement à la question « quelles
 factures nous manque-t-il ? ». Les lignes `MANQUANTE` portent des zéros et
-n'entrent donc dans aucun total. Désactivable par `CAMWATER_COMPLETER_MOIS=false`.
+n'entrent donc dans aucun total. Seules les périodes réellement interprétables
+servent de référence : une période illisible ne reproche pas aux autres
+administrations l'absence d'une facture pour un mois inexistant.
+Désactivable par `CAMWATER_COMPLETER_MOIS=false`.
+
+### 4.4 Une facture présentée est valable
+
+Règle métier structurante : **dès lors qu'une facture a été déposée, elle compte**.
+Le système la signale, jamais il ne la fait disparaître. Concrètement :
+
+* une ligne `À_VÉRIFIER`, `HORS_PERIMETRE` ou dont le ministère est indéterminé
+  **entre dans les totaux** de son administration et dans le `TOTAL GÉNÉRAL` ;
+  elle est mise en évidence, pas retirée ;
+* une facture **dont la lecture échoue entièrement** — scan illisible, poppler
+  absent, crédit API épuisé — est inscrite à la feuille `Factures en échec`
+  avec son motif. Sans cela elle n'existerait que dans `data/errors/` et rien
+  n'indiquerait qu'elle attend. Le Résumé porte en pied un renvoi
+  `FACTURES EN ÉCHEC — n fichier(s) à retraiter`, de sorte que **le classeur
+  seul suffit** à savoir ce qui reste à faire ;
+* la ligne d'échec **disparaît d'elle-même** quand la facture est finalement
+  intégrée : la feuille est une liste de travail, pas un historique ;
+* un **doublon refusé** n'y figure pas : la facture est déjà pointée, il n'y a
+  rien à retraiter.
+
+> L'empreinte d'un échec n'est **pas** portée au `Journal`. Le Journal sert au
+> contrôle de doublon : y inscrire un échec ferait refuser le même fichier lors
+> de la nouvelle tentative — exactement l'inverse du but recherché.
+
+**Totaux incomplets.** Un montant illisible ne peut pas être additionné : il
+compte pour zéro, et le total de l'administration devient un *minorant*. Pour
+qu'aucun total sous-évalué ne se lise comme un total définitif, la ligne du
+Résumé passe alors à l'état **`Reçue — total incomplet`** sur fond ambre, et le
+`TOTAL GÉNÉRAL` porte la mention `Total incomplet` dès qu'une seule
+administration est concernée.
+
+Deux exceptions à la règle, toutes deux voulues : les **lignes sans numéro de
+compte** (nulles par construction, §5.5) et les **doublons** (même facture
+présentée deux fois).
 
 ---
 
@@ -630,7 +668,7 @@ Toutes les options sont des variables d'environnement, ou un fichier `.env`
 La suite complète tourne **sans clé API** (la lecture visuelle est simulée) :
 
 ```bash
-python -m pytest tests/ -q      # 161 tests
+python -m pytest tests/ -q      # 174 tests
 ```
 
 Couverture : parsing des nombres et formules, dérivations, mapping ministère et
